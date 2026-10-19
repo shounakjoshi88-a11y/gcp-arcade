@@ -182,21 +182,49 @@ ok "lab zone: $ZONE   region: $REGION"
 
 INST1_ID="$(inst_field tf-instance-1 'value(id)')"
 INST2_ID="$(inst_field tf-instance-2 'value(id)')"
+
+# machine type and boot disk image of the pre-created instances.
+#
+# IMPORTANT: an instance's disks[0].source is the DISK, not the image. The
+# image lives on the disk as sourceImage, so the disk has to be looked up
+# separately. Getting this wrong makes Terraform plan a replacement, and
+# because boot_disk.initialize_params.image is ForceNew it then DELETES the
+# instance and fails to recreate it.
+MACHINE_TYPE="$(inst_field tf-instance-1 'value(machineType)' | sed 's|.*/||')"
+[ -z "$MACHINE_TYPE" ] && MACHINE_TYPE="e2-micro"
+
+IMAGE=""
+DISK_URL="$(inst_field tf-instance-1 'value(disks[0].source)')"
+DISK_NAME="$(basename "$DISK_URL")"
+if [ -n "$DISK_NAME" ]; then
+  IMAGE_URL="$(gcloud compute disks describe "$DISK_NAME" --zone "$ZONE" \
+    --project "$PROJECT_ID" --format="value(sourceImage)" 2>/dev/null)"
+  IMAGE="$(printf '%s' "$IMAGE_URL" \
+    | sed -e 's|.*/projects/||' -e 's|/global/images/|/|')"
+fi
+if [ -z "$IMAGE" ]; then
+  # the licence is the image family, e.g. debian-cloud/debian-12
+  IMAGE="$(inst_field tf-instance-1 'value(disks[0].licenses[0])')"
+fi
+# Sanity check: never accept a disk or a zone path as an image.
+case "$IMAGE" in
+  */zones/*|*/disks/*|*/instances/*|"") IMAGE="" ;;
+esac
+[ -z "$IMAGE" ] && IMAGE="debian-12"
+ok "existing machine type: $MACHINE_TYPE"
+ok "existing boot disk image: $IMAGE"
+
 if [ -z "$INST1_ID" ] || [ -z "$INST2_ID" ]; then
-  err "could not read the instance IDs for tf-instance-1 / tf-instance-2"
+  err "could not find the lab's pre-created instances tf-instance-1 / tf-instance-2"
+  echo ""
+  dim "  Either the lab has not started yet, or a previous run deleted them."
+  dim "  If they are gone, recreate them and re-run this script:"
+  dim "    gcloud compute instances create tf-instance-1 --zone=$ZONE --machine-type=$MACHINE_TYPE --image-family=debian-12 --image-project=debian-cloud"
+  dim "    gcloud compute instances create tf-instance-2 --zone=$ZONE --machine-type=$MACHINE_TYPE --image-family=debian-12 --image-project=debian-cloud"
   exit 1
 fi
 ok "tf-instance-1 id: $INST1_ID"
 ok "tf-instance-2 id: $INST2_ID"
-
-# machine type and boot disk image of the pre-created instances
-MACHINE_TYPE="$(inst_field tf-instance-1 'value(machineType)' | sed 's|.*/||')"
-IMAGE_SRC="$(inst_field tf-instance-1 'value(disks[0].source)')"
-IMAGE="$(printf '%s' "$IMAGE_SRC" | sed -e 's|.*/projects/|projects/|' -e 's|/global/images/|/|' -e 's|^projects/||')"
-[ -z "$MACHINE_TYPE" ] && MACHINE_TYPE="n1-standard-1"
-[ -z "$IMAGE" ] && IMAGE="debian-12"
-ok "existing machine type: $MACHINE_TYPE"
-ok "existing boot disk image: $IMAGE"
 
 # the existing startup script, so terraform does not have to change it
 STARTUP_SCRIPT=""
@@ -332,7 +360,42 @@ tf_init_migrate() {
   return 1
 }
 
-tf_apply() {
+tf_plan() {
+  info "terraform plan"
+  if terraform plan -input=false -no-color > "$WORKDIR/plan.log" 2>&1; then
+    PLAN_SUMMARY="$(grep -E '^Plan:' "$WORKDIR/plan.log" | tail -1)"
+    DESTROY_COUNT="$(printf '%s' "$PLAN_SUMMARY" | sed -n 's/.*[^0-9]\([0-9]\+\) to destroy.*/\1/p')"
+    [ -z "$DESTROY_COUNT" ] && DESTROY_COUNT=0
+    ok "plan: ${PLAN_SUMMARY:-no changes}"
+    return 0
+  fi
+  note_fail "terraform plan failed"
+  tail -30 "$WORKDIR/plan.log" | sed 's/^/    /'
+  return 1
+}
+
+tf_apply() {  # $1 = "allow" to permit destroys (only task 5 needs it)
+  local allow_destroy="${1:-0}"
+
+  tf_plan || return 1
+
+  # SAFETY NET. boot_disk.initialize_params.image and machine_type are
+  # ForceNew, so a configuration that does not match the imported instances
+  # makes Terraform delete them and then fail to recreate them - which
+  # destroys the lab. Never apply a plan that destroys anything unless the
+  # task explicitly asked for it.
+  if [ "$allow_destroy" != "allow" ] && [ "${DESTROY_COUNT:-0}" -gt 0 ]; then
+    note_fail "refusing to apply: the plan would DESTROY $DESTROY_COUNT resource(s)"
+    dim "  the configuration does not match the existing resources (usually the"
+    dim "  boot disk image or machine type), and Terraform would delete them and"
+    dim "  then fail to recreate them. Fix the configuration and re-run."
+    echo ""
+    grep -E "must be replaced|will be destroyed" "$WORKDIR/plan.log" | head -10 | sed 's/^/    /'
+    echo ""
+    dim "  the full plan is in $WORKDIR/plan.log"
+    return 1
+  fi
+
   info "terraform apply"
   if terraform apply -auto-approve -input=false -no-color > "$WORKDIR/apply.log" 2>&1; then
     ok "terraform apply complete"
@@ -345,6 +408,10 @@ tf_apply() {
 }
 
 tf_import() {  # $1 = address, $2 = id
+  if terraform state list 2>/dev/null | grep -qx "$1"; then
+    ok "$1 is already in the state - skipping the import"
+    return 0
+  fi
   info "terraform import $1"
   if terraform import -input=false -no-color "$1" "$2" > "$WORKDIR/import.log" 2>&1; then
     ok "imported $2"
@@ -611,7 +678,7 @@ run_task() {  # $1 = number
     write_instances_tf "two"
     tf_fmt
     tf_init
-    tf_apply
+    tf_apply "allow"
     dim "    $THIRD_INSTANCE has been removed from the configuration and destroyed"
     ;;
   6)
@@ -674,21 +741,22 @@ done
 # verify
 # ---------------------------------------------------------------------------
 step "Verify"
+echo "  instances:"
 gcloud compute instances list --project "$PROJECT_ID" \
-  --format="table(name,zone,machineType,status)" 2>/dev/null | sed 's/^/  /'
+  --filter="zone=$ZONE" --format="table(name,zone,machineType,status)" 2>/dev/null | sed 's/^/    /'
+echo "  networks:"
+gcloud compute networks list --project "$PROJECT_ID" \
+  --filter="name!~^default$" --format="table(name,subnetMode,autoCreateSubnetworks)" 2>/dev/null | sed 's/^/    /'
+echo "  subnets in $REGION:"
+gcloud compute networks subnets list --project "$PROJECT_ID" \
+  --filter="region=$REGION" --format="table(name,network,ipCidrRange,region)" 2>/dev/null | sed 's/^/    /'
+echo "  firewall rules:"
+gcloud compute firewall-rules list --project "$PROJECT_ID" \
+  --format="table(name,network,direction,priority,allow,sourceRanges)" 2>/dev/null | sed 's/^/    /'
+echo "  buckets:"
+gcloud storage ls --project "$PROJECT_ID" 2>/dev/null | sed 's/^/    /'
 echo ""
-gcloud compute networks list --project "$PROJECT_ID" 2>/dev/null | sed 's/^/  /'
-echo ""
-gcloud compute networks subnets list --project "$PROJECT_ID" 2>/dev/null | sed 's/^/  /'
-echo ""
-gcloud compute firewall-rules list --project "$PROJECT_ID" 2>/dev/null | sed 's/^/  /'
-echo ""
-gcloud storage ls --project "$PROJECT_ID" 2>/dev/null | sed 's/^/  /'
-echo ""
-if [ -d "$HOME/.terraform.d" ] || command -v terraform >/dev/null 2>&1; then
-  dim "  remote backend state:"
-  dim "    gs://$BUCKET_NAME/terraform/state"
-fi
+dim "  remote backend state: gs://$BUCKET_NAME/terraform/state"
 
 step "Summary"
 echo "  Project  : $PROJECT_ID"
