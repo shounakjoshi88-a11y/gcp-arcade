@@ -64,12 +64,13 @@ ZONE_OVERRIDE=""
 REGION_OVERRIDE=""
 WORKDIR="${GSP345_WORKDIR:-$HOME/gsp345}"
 BUCKET_OVERRIDE=""
-VPC_NAME="terraform-vpc"
-THIRD_INSTANCE="tf-instance-3"
+VPC_OVERRIDE=""
+INSTANCE_OVERRIDE=""
 ONLY_TASK=""
 ASSUME_YES=0
 SKIP_INSTALL=0
 RECREATE_INSTANCES=0
+RESET=0
 
 usage() {
   cat <<'USAGE_END'
@@ -91,6 +92,7 @@ OPTIONS:
    --task N          run only task N (1-7)
    --yes             do not pause between tasks
    --recreate-instances  recreate tf-instance-1/2 if they are missing
+   --reset           wipe the workdir first (use after restarting the lab)
    --skip-install    assume terraform is already on PATH
    -h, --help        this help
 USAGE_END
@@ -104,12 +106,13 @@ while [ $# -gt 0 ]; do
     --region)       REGION_OVERRIDE="$2";   shift 2 ;;
     --workdir)      WORKDIR="$2";           shift 2 ;;
     --bucket)       BUCKET_OVERRIDE="$2";   shift 2 ;;
-    --vpc)          VPC_NAME="$2";          shift 2 ;;
-    --instance)     THIRD_INSTANCE="$2";    shift 2 ;;
+    --vpc)          VPC_OVERRIDE="$2";        shift 2 ;;
+    --instance)     INSTANCE_OVERRIDE="$2";  shift 2 ;;
     --task)         ONLY_TASK="$2";         shift 2 ;;
     --yes)          ASSUME_YES=1;           shift ;;
     --skip-install) SKIP_INSTALL=1;         shift ;;
     --recreate-instances) RECREATE_INSTANCES=1; shift ;;
+    --reset)         RESET=1;                shift ;;
     -h|--help)      usage ;;
     *) echo "Unknown option: $1 (try --help)" >&2; exit 2 ;;
   esac
@@ -149,6 +152,39 @@ ok "project: $PROJECT_ID"
 # created early - the zone is recorded here so a later run can still find it
 # even if the lab's instances are gone
 mkdir -p "$WORKDIR" || { err "cannot create workdir $WORKDIR"; exit 1; }
+
+# --- the lab can be restarted, which gives a brand new project ---------------
+# Reusing the state of a previous lab would import the wrong instances and
+# point the backend at a bucket that no longer exists. Start clean.
+SAVED_PROJECT_FILE="$WORKDIR/.gsp345-project"
+if [ -f "$SAVED_PROJECT_FILE" ]; then
+  SAVED_PROJECT="$(cat "$SAVED_PROJECT_FILE" 2>/dev/null)"
+  if [ -n "$SAVED_PROJECT" ] && [ "$SAVED_PROJECT" != "$PROJECT_ID" ]; then
+    warn "this workdir was used for project $SAVED_PROJECT"
+    warn "the lab was restarted, so the old state and configuration are stale"
+    if [ "$RESET" = "1" ] || [ "$ASSUME_YES" = "1" ]; then
+      info "resetting $WORKDIR"
+      rm -rf "$WORKDIR/.terraform" "$WORKDIR/.terraform.lock.hcl" \
+             "$WORKDIR/terraform.tfstate" "$WORKDIR/terraform.tfstate.backup" \
+             "$WORKDIR/modules" "$WORKDIR/main.tf" "$WORKDIR/variables.tf" \
+             "$WORKDIR/.gsp345-progress" "$WORKDIR/.gsp345-zone"
+      ok "workdir reset for $PROJECT_ID"
+    else
+      err "a stale lab is in $WORKDIR. Re-run with --reset to start clean."
+      exit 1
+    fi
+  fi
+fi
+echo "$PROJECT_ID" > "$SAVED_PROJECT_FILE"
+
+if [ "$RESET" = "1" ]; then
+  info "--reset given - clearing $WORKDIR"
+  rm -rf "$WORKDIR/.terraform" "$WORKDIR/.terraform.lock.hcl" \
+         "$WORKDIR/terraform.tfstate" "$WORKDIR/terraform.tfstate.backup" \
+         "$WORKDIR/modules" "$WORKDIR/main.tf" "$WORKDIR/variables.tf" \
+         "$WORKDIR/.gsp345-progress" "$WORKDIR/.gsp345-zone"
+  ok "workdir cleared"
+fi
 
 if [ "${CLOUD_SHELL:-}" = "true" ]; then
   info "running inside Google Cloud Shell"
@@ -288,34 +324,83 @@ if [ -n "$META_JSON" ]; then
 fi
 [ -z "$STARTUP_SCRIPT" ] && STARTUP_SCRIPT="#!/bin/bash"
 
-# The bucket name is injected by the lab ("For the bucket name, use ..."), so
-# it cannot be derived from the project. Look for it: first an existing
-# tf-bucket-* bucket in the project, then the project metadata. Otherwise fall
-# back to the project ID and say so loudly - the lab grades the name.
+# ---------------------------------------------------------------------------
+# the names the lab injects: bucket, third instance, VPC
+# The lab renders them into its task text ("For the bucket name, use
+# tf-bucket-123456"), so they cannot be derived. Look for them, then ask
+# once - the whole lab text can be pasted in and the names pulled out of it.
+# ---------------------------------------------------------------------------
 BUCKET_NAME="$BUCKET_OVERRIDE"
-BUCKET_SOURCE="the --bucket flag"
+VPC_NAME="$VPC_OVERRIDE"
+THIRD_INSTANCE="$INSTANCE_OVERRIDE"
+LAB_VALUES=""
+
+# 1. a bucket the lab already created
 if [ -z "$BUCKET_NAME" ]; then
   BUCKET_NAME="$(gcloud storage ls --project "$PROJECT_ID" 2>/dev/null \
-    | sed 's|^gs://||; s|/$||' | grep -E '^tf-bucket-[a-z0-9._-]+$' | head -1)"
-  [ -n "$BUCKET_NAME" ] && BUCKET_SOURCE="an existing tf-bucket-* in this project"
+    | sed 's|^gs://||; s|/$||' | grep -E '^tf-bucket-[a-z0-9]+([.-][a-z0-9]+)*$' | head -1)"
 fi
+# 2. the project metadata (the lab's startup script)
 if [ -z "$BUCKET_NAME" ]; then
   BUCKET_NAME="$(gcloud compute project-info describe --project "$PROJECT_ID" \
     --format="value(commonInstanceMetadata.items)" 2>/dev/null \
-    | grep -oE 'tf-bucket-[a-z0-9._-]+' | head -1)"
-  [ -n "$BUCKET_NAME" ] && BUCKET_SOURCE="the project metadata"
+    | grep -oE 'tf-bucket-[a-z0-9]+([.-][a-z0-9]+)*' | head -1)"
 fi
+# 3. the project labels or description
 if [ -z "$BUCKET_NAME" ]; then
-  BUCKET_NAME="$PROJECT_ID"
-  BUCKET_SOURCE="the project ID (FALLBACK)"
+  BUCKET_NAME="$(gcloud projects describe "$PROJECT_ID" --format="value(labels)" 2>/dev/null \
+    | grep -oE 'tf-bucket-[a-z0-9]+([.-][a-z0-9]+)*' | head -1)"
+  [ -z "$BUCKET_NAME" ] && BUCKET_NAME="$(gcloud projects describe "$PROJECT_ID" \
+    --format="value(description)" 2>/dev/null \
+    | grep -oE 'tf-bucket-[a-z0-9]+([.-][a-z0-9]+)*' | head -1)"
 fi
-ok "remote backend bucket: $BUCKET_NAME   (from $BUCKET_SOURCE)"
-if [ "$BUCKET_SOURCE" = "the project ID (FALLBACK)" ]; then
-  warn "the bucket name could not be detected and may not be what the lab wants"
-  dim "    the lab injects it as 'For the bucket name, use tf-bucket-<number>'."
-  dim "    read it off the lab page and re-run with:  ./gsp345.sh --bucket <name>"
+# 4. an object in the project's own GCS bucket
+if [ -z "$BUCKET_NAME" ]; then
+  BUCKET_NAME="$(gsutil ls "gs://$PROJECT_ID" 2>/dev/null \
+    | grep -oE 'tf-bucket-[a-z0-9]+([.-][a-z0-9]+)*' | head -1)"
 fi
-ok "vpc name: $VPC_NAME    third instance: $THIRD_INSTANCE"
+
+MISSING=""
+[ -z "$BUCKET_NAME" ] && MISSING="$MISSING bucket"
+[ -z "$THIRD_INSTANCE" ] && MISSING="$MISSING third-instance"
+[ -z "$VPC_NAME" ] && MISSING="$MISSING vpc"
+
+# 5. ask for whatever is still missing - one paste covers all three
+if [ -n "$MISSING" ] && [ "$ASSUME_YES" != "1" ]; then
+  echo ""
+  warn "these lab values could not be detected:$MISSING"
+  dim "  they are written into the lab page's task text, for example:"
+  dim "    'For the bucket name, use tf-bucket-123456.'"
+  dim "    'Add a third instance resource and name it tf-instance-654321.'"
+  dim "    'Name the VPC tf-vpc-789012, and use a global routing mode.'"
+  dim "  copy that text from the lab page and paste it here."
+  dim "  (press Ctrl-D on a new line when you are done)"
+  printf "  %s>%s" "$C_YELLOW" "$C_RESET"
+  LAB_VALUES="$(cat)"
+
+  if [ -z "$BUCKET_NAME" ]; then
+    BUCKET_NAME="$(printf '%s' "$LAB_VALUES" | grep -oE 'tf-bucket-[a-z0-9]+([.-][a-z0-9]+)*' | head -1)"
+  fi
+  if [ -z "$VPC_NAME" ]; then
+    VPC_NAME="$(printf '%s' "$LAB_VALUES" | grep -oE 'tf-vpc-[a-z0-9]+([.-][a-z0-9]+)*' | head -1)"
+  fi
+  if [ -z "$THIRD_INSTANCE" ]; then
+    for CAND in $(printf '%s' "$LAB_VALUES" | grep -oE 'tf-instance-[0-9]+' | sort -u); do
+      case "$CAND" in
+        tf-instance-1|tf-instance-2) ;;
+        *) THIRD_INSTANCE="$CAND"; break ;;
+      esac
+    done
+  fi
+fi
+
+[ -z "$BUCKET_NAME" ] && BUCKET_NAME="$PROJECT_ID"
+[ -z "$THIRD_INSTANCE" ] && THIRD_INSTANCE="tf-instance-3"
+[ -z "$VPC_NAME" ] && VPC_NAME="terraform-vpc"
+BUCKET_NAME="$(printf '%s' "$BUCKET_NAME" | sed 's/[.-]*$//')"
+ok "remote backend bucket: $BUCKET_NAME"
+ok "third instance    : $THIRD_INSTANCE"
+ok "vpc name         : $VPC_NAME"
 
 PROGRESS_FILE="$WORKDIR/.gsp345-progress"
 ok "workdir ready: $WORKDIR"
@@ -854,12 +939,21 @@ echo "  Zone     : $ZONE"
 echo "  Workdir  : $WORKDIR"
 echo "  Bucket   : $BUCKET_NAME"
 echo "  VPC      : $VPC_NAME"
+echo "  Instance : $THIRD_INSTANCE"
 echo ""
 if [ "$FAILURES" -eq 0 ]; then
   printf "  %sAll steps completed.%s\n" "$C_GREEN" "$C_RESET"
 else
   printf "  %s%s step(s) reported a failure - see [FAIL] lines above.%s\n" "$C_RED" "$FAILURES" "$C_RESET"
 fi
+echo ""
+echo "  Click 'Check my progress' for each of these, in order:"
+echo "    1  Import infrastructure            20"
+echo "    2  Configure a remote backend       10"
+echo "    3  Modify and update infrastructure 20"
+echo "    4  Destroy resources                10"
+echo "    5  Use a Module from the Registry   20"
+echo "    6  Configure a firewall             20"
 echo ""
 dim "  Clean up: cd $WORKDIR && terraform destroy -auto-approve"
 echo ""
