@@ -236,6 +236,14 @@ ok "existing boot disk image: $IMAGE"
 
 # --- recreate the pre-created instances if asked -------------------------
 if [ "$RECREATE_INSTANCES" = "1" ]; then
+  # if a previous state still records the original image, recreate with it
+  SAVED_IMG="$(grep -hoE '"image": *"[^"]+"' \
+    "$WORKDIR/terraform.tfstate" "$WORKDIR/terraform.tfstate.backup" 2>/dev/null \
+    | head -1 | sed -E 's/.*"image": *"([^"]+)".*/\1/')"
+  if [ -n "$SAVED_IMG" ]; then
+    IMAGE="$SAVED_IMG"
+    info "using the image recorded in the previous state: $IMAGE"
+  fi
   printf '#!/bin/bash\n' > "$WORKDIR/startup.sh"
   for N in tf-instance-1 tf-instance-2; do
     if gcloud compute instances describe "$N" --zone "$ZONE" --project "$PROJECT_ID" >/dev/null 2>&1; then
