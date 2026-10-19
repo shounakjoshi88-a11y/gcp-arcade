@@ -349,11 +349,20 @@ at the first unfinished task. Use `--task N` to run a single task, or
 | machine type | `gcloud compute instances describe tf-instance-1` |
 | boot disk image | the instance's own disk source |
 | instance IDs (for `terraform import`) | the instance's numeric id |
+| bucket name | an existing `tf-bucket-*` bucket in the project, else the project metadata, else `--bucket` |
 
 The last three matter more than they look: `boot_disk.initialize_params.image`
 is a **ForceNew** field, so if the configured image does not match the
 existing disk, Terraform destroys and recreates the instance instead of
 updating it in place — and the import checkpoint never scores.
+
+The bucket name is injected by the lab (`For the bucket name, use
+tf-bucket-<number>`), so it is read from the project when possible. If it
+cannot be found, the script says so and tells you to pass it:
+
+```bash
+./gsp345.sh --bucket tf-bucket-178193
+```
 
 ### It validates the configuration it generates
 

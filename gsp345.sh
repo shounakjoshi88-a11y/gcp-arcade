@@ -288,8 +288,33 @@ if [ -n "$META_JSON" ]; then
 fi
 [ -z "$STARTUP_SCRIPT" ] && STARTUP_SCRIPT="#!/bin/bash"
 
-BUCKET_NAME="${BUCKET_OVERRIDE:-$PROJECT_ID}"
-ok "remote backend bucket: $BUCKET_NAME"
+# The bucket name is injected by the lab ("For the bucket name, use ..."), so
+# it cannot be derived from the project. Look for it: first an existing
+# tf-bucket-* bucket in the project, then the project metadata. Otherwise fall
+# back to the project ID and say so loudly - the lab grades the name.
+BUCKET_NAME="$BUCKET_OVERRIDE"
+BUCKET_SOURCE="the --bucket flag"
+if [ -z "$BUCKET_NAME" ]; then
+  BUCKET_NAME="$(gcloud storage ls --project "$PROJECT_ID" 2>/dev/null \
+    | sed 's|^gs://||; s|/$||' | grep -E '^tf-bucket-[a-z0-9._-]+$' | head -1)"
+  [ -n "$BUCKET_NAME" ] && BUCKET_SOURCE="an existing tf-bucket-* in this project"
+fi
+if [ -z "$BUCKET_NAME" ]; then
+  BUCKET_NAME="$(gcloud compute project-info describe --project "$PROJECT_ID" \
+    --format="value(commonInstanceMetadata.items)" 2>/dev/null \
+    | grep -oE 'tf-bucket-[a-z0-9._-]+' | head -1)"
+  [ -n "$BUCKET_NAME" ] && BUCKET_SOURCE="the project metadata"
+fi
+if [ -z "$BUCKET_NAME" ]; then
+  BUCKET_NAME="$PROJECT_ID"
+  BUCKET_SOURCE="the project ID (FALLBACK)"
+fi
+ok "remote backend bucket: $BUCKET_NAME   (from $BUCKET_SOURCE)"
+if [ "$BUCKET_SOURCE" = "the project ID (FALLBACK)" ]; then
+  warn "the bucket name could not be detected and may not be what the lab wants"
+  dim "    the lab injects it as 'For the bucket name, use tf-bucket-<number>'."
+  dim "    read it off the lab page and re-run with:  ./gsp345.sh --bucket <name>"
+fi
 ok "vpc name: $VPC_NAME    third instance: $THIRD_INSTANCE"
 
 PROGRESS_FILE="$WORKDIR/.gsp345-progress"
@@ -416,6 +441,10 @@ tf_plan() {
     PLAN_SUMMARY="$(grep -E '^Plan:' "$WORKDIR/plan.log" | tail -1)"
     DESTROY_COUNT="$(printf '%s' "$PLAN_SUMMARY" | sed -n 's/.*[^0-9]\([0-9]\+\) to destroy.*/\1/p')"
     [ -z "$DESTROY_COUNT" ] && DESTROY_COUNT=0
+    # the addresses of everything the plan would destroy or replace
+    DESTROY_ADDRS="$(grep -E '^[[:space:]]*#[[:space:]]+[^[:space:]]+ (will be destroyed|must be replaced)' \
+      "$WORKDIR/plan.log" \
+      | sed -E 's/^[[:space:]]*#[[:space:]]+([^[:space:]]+).*/\1/' | sort -u)"
     ok "plan: ${PLAN_SUMMARY:-no changes}"
     return 0
   fi
@@ -424,26 +453,36 @@ tf_plan() {
   return 1
 }
 
-tf_apply() {  # $1 = "allow" to permit destroys (only task 5 needs it)
-  local allow_destroy="${1:-0}"
+tf_apply() {  # $1 = space separated list of resource addresses that may be
+               #      destroyed, "*" for any, "" for none.
+  local allow="${1:-}"
 
   tf_plan || return 1
 
   # SAFETY NET. boot_disk.initialize_params.image and machine_type are
   # ForceNew, so a configuration that does not match the imported instances
   # makes Terraform delete them and then fail to recreate them - which
-  # destroys the lab. Never apply a plan that destroys anything unless the
-  # task explicitly asked for it.
-  if [ "$allow_destroy" != "allow" ] && [ "${DESTROY_COUNT:-0}" -gt 0 ]; then
-    note_fail "refusing to apply: the plan would DESTROY $DESTROY_COUNT resource(s)"
-    dim "  the configuration does not match the existing resources (usually the"
-    dim "  boot disk image or machine type), and Terraform would delete them and"
-    dim "  then fail to recreate them. Fix the configuration and re-run."
-    echo ""
-    grep -E "must be replaced|will be destroyed" "$WORKDIR/plan.log" | head -10 | sed 's/^/    /'
-    echo ""
-    dim "  the full plan is in $WORKDIR/plan.log"
-    return 1
+  # destroys the lab. Only the resources a task explicitly asks to replace
+  # are allowed through.
+  if [ "$allow" != "*" ]; then
+    local bad="" addr
+    for addr in $DESTROY_ADDRS; do
+      case " $allow " in
+        *" $addr "*) ;;
+        *) bad="$bad $addr" ;;
+      esac
+    done
+    if [ -n "$bad" ]; then
+      note_fail "refusing to apply: the plan would replace or destroy $(echo $bad | tr '\n' ' ')"
+      dim "  the configuration does not match the existing resources (usually the"
+      dim "  boot disk image or machine type), and Terraform would delete them and"
+      dim "  then fail to recreate them. Fix the configuration and re-run."
+      echo ""
+      grep -E "must be replaced|will be destroyed" "$WORKDIR/plan.log" | head -10 | sed 's/^/    /'
+      echo ""
+      dim "  the full plan is in $WORKDIR/plan.log"
+      return 1
+    fi
   fi
 
   info "terraform apply"
@@ -704,8 +743,8 @@ run_task() {  # $1 = number
     write_storage_tf
     write_main_tf 1 0 0 0
     tf_fmt
-    tf_init
-    tf_apply
+    tf_init_migrate
+    tf_apply "module.storage.google_storage_bucket.storage-bucket"
     info "switching the backend to gs://$BUCKET_NAME/terraform/state"
     write_main_tf 1 1 0 0
     tf_fmt
@@ -718,7 +757,7 @@ run_task() {  # $1 = number
     write_instances_tf "three"
     tf_fmt
     tf_init
-    tf_apply
+    tf_apply "*"
     dim "    all three instances are now e2-standard-2"
     ;;
   5)
@@ -728,7 +767,7 @@ run_task() {  # $1 = number
     write_instances_tf "two"
     tf_fmt
     tf_init
-    tf_apply "allow"
+    tf_apply "*"
     dim "    $THIRD_INSTANCE has been removed from the configuration and destroyed"
     ;;
   6)
@@ -738,7 +777,7 @@ run_task() {  # $1 = number
     write_main_tf 1 1 1 0
     tf_fmt
     tf_init
-    tf_apply
+    tf_apply "*"
     dim "    VPC $VPC_NAME with subnet-01 (10.10.10.0/24) and subnet-02 (10.10.20.0/24)"
     dim "    tf-instance-1 -> subnet-01, tf-instance-2 -> subnet-02"
     ;;
@@ -748,7 +787,7 @@ run_task() {  # $1 = number
     write_main_tf 1 1 1 1
     tf_fmt
     tf_init
-    tf_apply
+    tf_apply "*"
     dim "    tf-firewall: tcp:80 from 0.0.0.0/0 on $VPC_NAME"
     ;;
   esac
