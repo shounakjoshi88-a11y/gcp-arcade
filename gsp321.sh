@@ -20,7 +20,7 @@
 #     --region REGION    e.g. us-central1           (default: derived from --zone)
 #     --workdir PATH     scratch dir for manifests (default: $HOME/gsp321)
 #     --timeout MINUTES  how long to wait for the GKE LoadBalancer IP (default: 10)
-#     --skip-monitor     skip Task 8 (uptime check)
+#     --engineer EMAIL     the additional engineer account (default: any other viewer)
 #     --skip-iam         skip Task 9 (promote viewer -> editor)
 #     -h, --help         this help
 #
@@ -65,6 +65,7 @@ ZONE_OVERRIDE=""
 REGION_OVERRIDE=""
 WORKDIR="${GSP321_WORKDIR:-$HOME/gsp321}"
 WAIT_MINUTES="${GSP321_WAIT_MINUTES:-10}"
+ENGINEER_OVERRIDE=""
 SKIP_MONITOR=0
 SKIP_IAM=0
 
@@ -87,7 +88,7 @@ OPTIONS:
    --region REGION    e.g. us-central1           (default: derived from --zone)
    --workdir PATH     scratch dir for manifests (default: $HOME/gsp321)
    --timeout MINUTES  wait time for the GKE LoadBalancer IP (default: 10)
-   --skip-monitor     skip Task 8 (uptime check)
+   --engineer EMAIL     the additional engineer account (default: any other viewer)
    --skip-iam         skip Task 9 (promote viewer -> editor)
    -h, --help         this help
 USAGE_END
@@ -101,6 +102,7 @@ while [ $# -gt 0 ]; do
     --region)       REGION_OVERRIDE="$2";   shift 2 ;;
     --workdir)      WORKDIR="$2";           shift 2 ;;
     --timeout)      WAIT_MINUTES="$2";      shift 2 ;;
+    --engineer)      ENGINEER_OVERRIDE="$2"; shift 2 ;;
     --skip-monitor) SKIP_MONITOR=1;         shift ;;
     --skip-iam)     SKIP_IAM=1;             shift ;;
     -h|--help)      usage ;;
@@ -589,75 +591,72 @@ if [ "$SKIP_IAM" -eq 1 ]; then
 else
   step "Task 9 - Provide access for an additional engineer"
 
-  # Collect the members that currently hold roles/viewer.
-  # Preferred path: let gcloud flatten the policy for us.
-  VIEWERS="$(gcloud projects get-iam-policy "$PROJECT_ID" \
+  # The additional engineer is the *other* lab account, not the one we run as.
+  # The lab's own instructions are "IAM -> the second user -> Edit -> Role ->
+  # Editor -> Save", and the console REPLACES the role. gcloud's
+  # add-iam-policy-binding only ADDS a binding, so the viewer binding has to be
+  # removed as well or the account is left on viewer *and* editor.
+  VIEWER_USERS="$(gcloud projects get-iam-policy "$PROJECT_ID" \
     --flatten="bindings[].members" \
     --filter="bindings.role:roles/viewer" \
-    --format="value(bindings.members)" 2>/dev/null)"
+    --format="value(bindings.members)" 2>/dev/null \
+    | grep -E '^user:[^ ]+$' || true)"
 
-  # Sanity check: the output must be a list of member strings, not raw JSON.
-  if printf '%s' "$VIEWERS" | grep -q '^[{\[]'; then
-    warn "flattened IAM query returned raw JSON - parsing the policy directly"
-    VIEWERS=""
-    RAW_POLICY="$(gcloud projects get-iam-policy "$PROJECT_ID" --format=json 2>/dev/null)"
-    if command -v jq >/dev/null 2>&1; then
-      VIEWERS="$(printf '%s' "$RAW_POLICY" \
-        | jq -r '.bindings[]? | select(.role == "roles/viewer") | .members[]?' 2>/dev/null)"
+  if [ -n "$ENGINEER_OVERRIDE" ]; then
+    TARGETS="user:$ENGINEER_OVERRIDE"
+  else
+    TARGETS=""
+    for MEMBER in $VIEWER_USERS; do
+      [ "$MEMBER" = "user:$ACTIVE_ACCOUNT" ] && continue
+      TARGETS="$TARGETS $MEMBER"
+    done
+    TARGETS="${TARGETS# }"
+    if [ -z "$TARGETS" ] && [ -n "$VIEWER_USERS" ]; then
+      TARGETS="$VIEWER_USERS"
+      warn "no other account holds roles/viewer - promoting the active account"
     fi
   fi
 
-  # Keep only well-formed member strings - anything else is parse garbage.
-  VIEWERS="$(printf '%s' "$VIEWERS" | grep -E '^[a-zA-Z0-9._-]+:[^ ]+$' || true)"
-
-  if [ -z "$VIEWERS" ]; then
-    warn "could not determine who still holds roles/viewer"
-    note_fail "Task 9 skipped: IAM policy could not be parsed"
+  if [ -z "$TARGETS" ]; then
+    warn "could not find any account holding roles/viewer"
+    note_fail "Task 9 skipped: no viewer account found"
     dim "  run this by hand:"
-    dim "    gcloud projects get-iam-policy $PROJECT_ID \\"
-    dim "      --flatten='bindings[].members' --filter='bindings.role:roles/viewer' \\"
-    dim "      --format='value(bindings.members)'"
+    dim "    gcloud projects get-iam-policy $PROJECT_ID --flatten='bindings[].members' \\"
+    dim "      --filter='bindings.role:roles/viewer' --format='value(bindings.members)'"
   else
-    PROMOTED=0
-    SKIPPED=0
-    for MEMBER in $VIEWERS; do
-      case "$MEMBER" in
-        user:*)
-          EMAIL="${MEMBER#user:}"
-          if gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-               --member="user:$EMAIL" --role=roles/editor --quiet >/dev/null 2>&1; then
-            ok "granted roles/editor to $EMAIL"
-            PROMOTED=$((PROMOTED + 1))
-          else
-            note_fail "could not grant editor to $EMAIL"
-          fi
-          ;;
-        *)
-          dim "skipping non-user member: $MEMBER"
-          SKIPPED=$((SKIPPED + 1))
-          ;;
-      esac
+    for MEMBER in $TARGETS; do
+      EMAIL="${MEMBER#user:}"
+      if gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+           --member="user:$EMAIL" --role=roles/editor --quiet >/dev/null 2>&1; then
+        ok "granted roles/editor to $EMAIL"
+      else
+        note_fail "could not grant editor to $EMAIL"
+        continue
+      fi
+      # Mirror the console: setting the role to Editor drops the Viewer binding.
+      if gcloud projects remove-iam-policy-binding "$PROJECT_ID" \
+           --member="user:$EMAIL" --role=roles/viewer --quiet >/dev/null 2>&1; then
+        ok "removed roles/viewer from $EMAIL"
+      else
+        warn "could not remove roles/viewer from $EMAIL (it may already be gone)"
+      fi
     done
 
-    if [ "$PROMOTED" -eq 0 ] && [ "$SKIPPED" -eq 0 ]; then
-      info "no roles/viewer users left to promote (Task 9 already done?)"
-    fi
-
-    # Verify: no user account should still be sitting on roles/viewer.
-    CHECK_RAW="$(gcloud projects get-iam-policy "$PROJECT_ID" \
-      --flatten="bindings[].members" \
-      --filter="bindings.role=roles/viewer" \
-      --format="value(bindings.members)" 2>/dev/null)"
-    if printf '%s' "$CHECK_RAW" | grep -q '^[{\[]'; then
-      warn "could not re-read the IAM policy to verify Task 9"
-    else
-      REMAINING="$(printf '%s' "$CHECK_RAW" | grep -E '^user:[^ ]+$' || true)"
-      if [ -n "$REMAINING" ]; then
-        note_fail "users still holding roles/viewer: $(echo $REMAINING | tr '\n' ' ')"
+    # Verify: each target holds roles/editor and no longer holds roles/viewer.
+    for MEMBER in $TARGETS; do
+      EMAIL="${MEMBER#user:}"
+      ROLES="$(gcloud projects get-iam-policy "$PROJECT_ID" \
+        --flatten="bindings[].members" \
+        --format="value(bindings.role,bindings.members)" 2>/dev/null \
+        | awk -F',' -v m="user:$EMAIL" '$2 == m { print $1 }')"
+      if printf '%s' "$ROLES" | grep -qx "roles/editor" && ! printf '%s' "$ROLES" | grep -qx "roles/viewer"; then
+        ok "$EMAIL is now editor (no leftover viewer binding)"
+      elif printf '%s' "$ROLES" | grep -qx "roles/editor"; then
+        warn "$EMAIL holds editor but still has a roles/viewer binding"
       else
-        ok "no user accounts left with roles/viewer"
+        note_fail "$EMAIL does not hold roles/editor"
       fi
-    fi
+    done
   fi
 fi
 
