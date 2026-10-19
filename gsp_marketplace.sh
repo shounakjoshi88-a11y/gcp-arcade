@@ -68,7 +68,7 @@ DO_DESTROY=0
 # pre-created instance does not exist for this lab. Keep them here, and
 # override with --zone / --region.
 LAB_REGION="asia-east1"
-LAB_ZONE="asia-east1-b"
+LAB_ZONE="asia-east1-a"
 
 usage() {
   cat <<'USAGE_END'
