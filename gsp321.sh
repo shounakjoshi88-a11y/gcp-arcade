@@ -122,6 +122,24 @@ fi
 ZONE="${ZONE_OVERRIDE:-${ZONE:-us-central1-a}}"
 REGION="${REGION_OVERRIDE:-${REGION:-${ZONE%-*}}}"
 
+# Cloud Skills Boost points gcloud's own config at the lab's region/zone, and
+# that is more reliable than any environment variable. Prefer it.
+GCP_ZONE="$(gcloud config get-value compute/zone 2>/dev/null)"
+GCP_REGION="$(gcloud config get-value compute/region 2>/dev/null)"
+[ "$GCP_ZONE" = "(unset)" ] && GCP_ZONE=""
+[ "$GCP_REGION" = "(unset)" ] && GCP_REGION=""
+
+if [ -z "$ZONE_OVERRIDE" ]; then
+  ZONE="${GCP_ZONE:-${CLOUDSDK_COMPUTE_ZONE:-${ZONE:-us-central1-a}}}"
+fi
+
+if [ -n "$ZONE_OVERRIDE" ] && [ -z "$REGION_OVERRIDE" ]; then
+  # An explicit zone implies its region - do not mix it with the config region.
+  REGION="${ZONE_OVERRIDE%-*}"
+else
+  REGION="${REGION_OVERRIDE:-${GCP_REGION:-${CLOUDSDK_COMPUTE_REGION:-${ZONE%-*}}}}"
+fi
+
 SQL_VERSION="${SQL_VERSION:-MYSQL_5_7}"
 SQL_ROOT_PASSWORD="${SQL_ROOT_PASSWORD:-awesome}"
 SQL_DB="wordpress"
@@ -175,18 +193,36 @@ else
   warn "not in Cloud Shell - zone/project defaults may be wrong, use --zone/--project"
 fi
 
-# The lab hands you two accounts. Task 8 and Task 9 both need Editor.
-HAS_EDITOR="$(gcloud projects get-iam-policy "$PROJECT_ID" \
+# The lab hands you two accounts. The active one usually holds roles/owner,
+# which is enough for everything - so list the real roles instead of assuming
+# roles/editor and warning on a false negative.
+#
+# NOTE: deliberately no --filter here. Member strings look like
+# "user:someone@example.com" and the ':' inside a filter value is ambiguous.
+# Pull role+member pairs and match locally instead.
+USER_ROLES="$(gcloud projects get-iam-policy "$PROJECT_ID" \
   --flatten="bindings[].members" \
-  --filter="bindings.role:roles/editor AND bindings.members:user:${ACTIVE_ACCOUNT}" \
-  --format="value(bindings.members)" 2>/dev/null)"
-if [ -n "$HAS_EDITOR" ]; then
-  ok "active account holds roles/editor"
-else
-  warn "active account does NOT hold roles/editor."
-  warn "Task 8 (uptime check) and Task 9 (promote engineer) will fail with PERMISSION_DENIED."
-  warn "Switch to the primary lab account, or grant it yourself:"
+  --format="value(bindings.role,bindings.members)" 2>/dev/null \
+  | awk -F',' -v u="user:${ACTIVE_ACCOUNT}" '$2 == u { print $1 }' \
+  | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+
+if [ -z "$USER_ROLES" ] && command -v jq >/dev/null 2>&1; then
+  USER_ROLES="$(gcloud projects get-iam-policy "$PROJECT_ID" --format=json 2>/dev/null \
+    | jq -r --arg u "user:${ACTIVE_ACCOUNT}" \
+        '.bindings[]? | select(.members[]? | . == $u) | .role' 2>/dev/null \
+    | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+fi
+
+if printf '%s' "$USER_ROLES" | grep -qE 'roles/(owner|editor|iam\.securityAdmin|iam\.projectIamAdmin)'; then
+  ok "active account roles: $USER_ROLES"
+elif [ -n "$USER_ROLES" ]; then
+  warn "active account roles: $USER_ROLES"
+  warn "Task 8 (uptime check) and Task 9 (promote engineer) need editor-level rights."
+  warn "Grant yourself editor, then re-run:"
   warn "  gcloud projects add-iam-policy-binding $PROJECT_ID --member=\"user:$ACTIVE_ACCOUNT\" --role=roles/editor"
+else
+  warn "could not read the active account's project roles - check IAM & Admin"
+  warn "Task 8 and Task 9 may fail with PERMISSION_DENIED."
 fi
 
 mkdir -p "$WORKDIR" || { err "cannot create workdir $WORKDIR"; exit 1; }
@@ -233,6 +269,19 @@ ensure_firewall() { # $1 = name, $2 = network
   fi
 }
 
+# The lab manifests live in a Google-managed bucket. Current labs point at
+# gs://spls/gsp321/, older material at gs://cloud-training/gsp321/. Try both.
+fetch_lab_files() { # $1 = subdir, $2 = destination dir
+  for LB_BUCKET in ${GSP321_BUCKET:-"gs://spls/gsp321" "gs://cloud-training/gsp321"}; do
+    if gsutil cp -r "$LB_BUCKET/$1" "$2" >/dev/null 2>&1; then
+      ok "fetched $1 from $LB_BUCKET"
+      return 0
+    fi
+  done
+  note_fail "could not fetch $1 from any known lab bucket"
+  return 1
+}
+
 # ---------------------------------------------------------------------------
 # Task 1 - development VPC
 # ---------------------------------------------------------------------------
@@ -246,12 +295,18 @@ ensure_subnet "griffin-dev-mgmt" "192.168.32.0/20" "griffin-dev-vpc"
 # ---------------------------------------------------------------------------
 step "Task 2 - Production VPC (Deployment Manager)"
 if [ ! -f "$WORKDIR/dm/prod-network.yaml" ]; then
-  gsutil cp -r gs://cloud-training/gsp321/dm "$WORKDIR/" >/dev/null 2>&1 \
-    && ok "fetched dm/ manifests" \
-    || note_fail "could not fetch gs://cloud-training/gsp321/dm"
+  fetch_lab_files "dm" "$WORKDIR/"
 fi
 if [ -f "$WORKDIR/dm/prod-network.yaml" ]; then
-  sed -i "s/SET_REGION/$REGION/g" "$WORKDIR/dm/prod-network.yaml"
+  if grep -q "SET_REGION" "$WORKDIR/dm/prod-network.yaml"; then
+    sed -i "s/SET_REGION/$REGION/g" "$WORKDIR/dm/prod-network.yaml"
+  else
+    warn "prod-network.yaml has no SET_REGION placeholder - patching the region field"
+    sed -i -E "s/(region:[[:space:]]*)[A-Za-z0-9_-]+/\1$REGION/g" "$WORKDIR/dm/prod-network.yaml"
+  fi
+  grep -q "$REGION" "$WORKDIR/dm/prod-network.yaml" \
+    && ok "prod-network.yaml region set to $REGION" \
+    || note_fail "could not set the region in prod-network.yaml"
   if gcloud deployment-manager deployments describe "$DEPLOYMENT_MANAGER_NAME" >/dev/null 2>&1; then
     ok "deployment $DEPLOYMENT_MANAGER_NAME already exists"
   else
@@ -351,10 +406,17 @@ gcloud container clusters get-credentials "$CLUSTER" --zone "$ZONE" >/dev/null 2
 # ---------------------------------------------------------------------------
 step "Task 6 - Prepare the Kubernetes cluster"
 if [ ! -d "$WORKDIR/wp-k8s" ]; then
-  gsutil cp -r gs://cloud-training/gsp321/wp-k8s "$WORKDIR/" >/dev/null 2>&1 \
-    && ok "fetched wp-k8s/ manifests" \
-    || note_fail "could not fetch gs://cloud-training/gsp321/wp-k8s"
+  fetch_lab_files "wp-k8s" "$WORKDIR/"
 fi
+
+# A 404 from GCS can leave an XML error page where a manifest should be.
+for WF in wp-env.yaml wp-deployment.yaml wp-service.yaml; do
+  if [ ! -s "$WORKDIR/wp-k8s/$WF" ]; then
+    note_fail "wp-k8s/$WF is missing or empty"
+  elif grep -q "NoSuchKey\|<Error>" "$WORKDIR/wp-k8s/$WF" 2>/dev/null; then
+    note_fail "wp-k8s/$WF is a GCS error page, not a manifest"
+  fi
+done
 
 cat > "$WORKDIR/wp-k8s/wp-env.yaml" <<EOF_END
 kind: PersistentVolumeClaim
@@ -425,7 +487,15 @@ if [ -z "$INSTANCE_ID" ]; then
 else
   ok "instance connection name: $INSTANCE_ID"
   if [ -f "$WORKDIR/wp-k8s/wp-deployment.yaml" ]; then
-    sed -i "s/YOUR_SQL_INSTANCE/$INSTANCE_ID/g" "$WORKDIR/wp-k8s/wp-deployment.yaml"
+    if grep -q "YOUR_SQL_INSTANCE" "$WORKDIR/wp-k8s/wp-deployment.yaml"; then
+      sed -i "s/YOUR_SQL_INSTANCE/$INSTANCE_ID/g" "$WORKDIR/wp-k8s/wp-deployment.yaml"
+    else
+      warn "no YOUR_SQL_INSTANCE placeholder - repointing the proxy at $INSTANCE_ID"
+      sed -i -E "s#(-instances=)[^=\"]+#\1$INSTANCE_ID#g" "$WORKDIR/wp-k8s/wp-deployment.yaml"
+    fi
+    grep -q "$INSTANCE_ID" "$WORKDIR/wp-k8s/wp-deployment.yaml" \
+      && ok "wp-deployment.yaml points at $INSTANCE_ID" \
+      || note_fail "wp-deployment.yaml does not reference $INSTANCE_ID"
     kubectl apply -f "$WORKDIR/wp-k8s/wp-deployment.yaml" >/dev/null 2>&1 \
       && ok "applied wp-deployment.yaml" \
       || note_fail "could not apply wp-deployment.yaml"

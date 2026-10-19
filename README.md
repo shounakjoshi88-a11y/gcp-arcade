@@ -42,6 +42,20 @@ already exists. It exits `0` when every step succeeded and `1` if any step
 reported a failure (the failure is printed as a `[FAIL]` line, and the rest of
 the lab still runs).
 
+It also auto-detects the lab's environment, so you normally need no flags:
+
+- **project** — from `gcloud config get-value project`, falling back to
+  `$DEVSHELL_PROJECT_ID`
+- **region / zone** — from `gcloud config get-value compute/zone` and
+  `compute/region`. Cloud Skills Boost points these at the lab's own
+  region and zone, which is more reliable than any environment variable.
+  Both are printed in the banner so you can spot a mismatch instantly.
+- **lab manifests** — fetched from `gs://spls/gsp321/` (what current labs
+  use), falling back to the older `gs://cloud-training/gsp321/`
+- **your roles** — the preflight lists the roles the active account actually
+  holds, so a `roles/owner` account no longer gets a false "you need editor"
+  warning
+
 ### Options
 
 | Flag | Default | What it does |
@@ -124,12 +138,31 @@ kubectl get pvc
 
 ### `PERMISSION_DENIED` on Task 8 or 9
 
-You're signed in as the **second lab account**, which only has Viewer. Task 8
-and Task 9 both need Editor. Either switch to the primary account, or:
+Task 8 and Task 9 both need Editor-level rights. The preflight prints the
+roles the active account actually holds, so start with:
+
+```bash
+gcloud projects get-iam-policy $PROJECT_ID \
+  --flatten="bindings[].members" \
+  --format="value(bindings.role,bindings.members)" | grep "$ACCOUNT"
+```
+
+`roles/owner` is enough. If you really only have `roles/viewer`, grant
+yourself editor:
 
 ```bash
 gcloud projects add-iam-policy-binding $PROJECT_ID \
   --member="user:$(gcloud config get-value account)" --role=roles/editor
+```
+
+### Resources created in the wrong region
+
+Cloud Skills Boost usually points `gcloud config` at the lab's zone already.
+If not, pass them explicitly — the region is derived from the zone unless you
+also pass `--region`:
+
+```bash
+./gsp321.sh --zone us-central1-a
 ```
 
 ### `MYSQL_5_7` rejected
