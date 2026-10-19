@@ -66,10 +66,10 @@ ONLY_TASK=""
 ASSUME_YES=0
 
 # The lab's regions and zones. Injected per lab run, so they live here.
-LAB_REGION1="us-central1"
-LAB_ZONE1="us-central1-a"
-LAB_REGION2="us-west1"
-LAB_ZONE2="us-west1-b"
+LAB_REGION1="us-west1"
+LAB_ZONE1="us-west1-c"
+LAB_REGION2="us-east1"
+LAB_ZONE2="us-east1-b"
 
 usage() {
   cat <<'USAGE_END'
@@ -127,12 +127,24 @@ fi
 REGION1="${REGION1_OVERRIDE:-$LAB_REGION1}"
 ZONE1="${ZONE1_OVERRIDE:-$LAB_ZONE1}"
 REGION2="${REGION2_OVERRIDE:-$LAB_REGION2}"
+REGION2_SOURCE="the lab default"
+[ -n "$REGION2_OVERRIDE" ] && REGION2_SOURCE="the --region2 flag"
 ZONE2="${ZONE2_OVERRIDE:-$LAB_ZONE2}"
 
 printf "%s%s  Virtual Private Cloud Networking and Compute Engine%s\n" "$C_CYAN" "$C_BOLD" "$C_RESET"
 printf "  %sproject=%s  %sregion1=%s  %szone1=%s  %sregion2=%s  %szone2=%s  %snetwork=%s%s\n" \
   "$C_DIM" "$PROJECT_ID" "$C_DIM" "$REGION1" "$C_DIM" "$ZONE1" "$C_DIM" "$REGION2" \
   "$C_DIM" "$ZONE2" "$C_DIM" "$NETWORK" "$C_RESET"
+
+printf "  %sYour lab setup panel says Region %s / Zone %s. The lab's second region is %s / %s.%s\n" "$C_DIM" "$REGION1" "$ZONE1" "$REGION2" "$ZONE2" "$C_RESET"
+printf "  %sIf the lab page says different values, re-run with:%s\n" "$C_DIM" "$C_RESET"
+printf "  %s  ./gsp_vpc.sh --region1 <r> --zone1 <z> --region2 <r> --zone2 <z>%s\n" "$C_DIM" "$C_RESET"
+
+if [ "$REGION1" = "$REGION2" ]; then
+  err "region1 and region2 are both $REGION1 - the lab needs two different regions"
+  err "pass the second one explicitly:  --region2 <region> --zone2 <zone>"
+  exit 1
+fi
 
 step "Preflight checks"
 
