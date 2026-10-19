@@ -1,0 +1,572 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  GSP321 - "Develop Your Google Cloud Network"
+#  Google Cloud Arcade / Cloud Skills Boost challenge lab.
+#
+#  One-shot provisioning script designed to run unattended in Google Cloud
+#  Shell. Idempotent: safe to re-run, it skips anything that already exists.
+#
+#  QUICK START (Cloud Shell):
+#     curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp321.sh
+#     chmod +x gsp321.sh
+#     ./gsp321.sh
+#
+#  ...or in a single line, no download needed:
+#     bash <(curl -fsSL https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp321.sh)
+#
+#  OPTIONS:
+#     --project ID       GCP project to use        (default: active gcloud project)
+#     --zone ZONE        e.g. us-central1-a         (default: $ZONE, else us-central1-a)
+#     --region REGION    e.g. us-central1           (default: derived from --zone)
+#     --workdir PATH     scratch dir for manifests (default: $HOME/gsp321)
+#     --timeout MINUTES  how long to wait for the GKE LoadBalancer IP (default: 10)
+#     --skip-monitor     skip Task 8 (uptime check)
+#     --skip-iam         skip Task 9 (promote viewer -> editor)
+#     -h, --help         this help
+#
+#  NOTES:
+#   * Task 8 waits for the LoadBalancer external IP before creating the uptime
+#     check. The upstream version of this script read the IP ~2 seconds after
+#     the Service was created, when it is still empty, which made the API
+#     reject the check with "uptime_url check is missing a host".
+#   * Task 8 also sends the required `project_id` label, which the
+#     `uptime_url` monitored resource descriptor mandates.
+# =============================================================================
+
+set -uo pipefail
+
+# ---------------------------------------------------------------------------
+# colors - defined locally so the script renders correctly outside Cloud Shell
+# ---------------------------------------------------------------------------
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+  C_RESET=$'\033[0m'; C_BOLD=$'\033[1m'; C_DIM=$'\033[2m'
+  C_RED=$'\033[31m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'
+  C_BLUE=$'\033[34m'; C_CYAN=$'\033[36m'
+else
+  C_RESET=""; C_BOLD=""; C_DIM=""
+  C_RED=""; C_GREEN=""; C_YELLOW=""; C_BLUE=""; C_CYAN=""
+fi
+
+step() { printf "\n%s%s== %s%s\n" "$C_CYAN" "$C_BOLD" "$*" "$C_RESET"; }
+ok()   { printf "  %s[OK]%s   %s\n"   "$C_GREEN"  "$C_RESET" "$*"; }
+warn() { printf "  %s[WARN]%s %s\n" "$C_YELLOW" "$C_RESET" "$*"; }
+err()  { printf "  %s[FAIL]%s %s\n" "$C_RED"    "$C_RESET" "$*"; }
+info() { printf "  %s[INFO]%s %s\n" "$C_BLUE"   "$C_RESET" "$*"; }
+dim()  { printf "  %s%s%s\n"          "$C_DIM"    "$*"       "$C_RESET"; }
+
+FAILURES=0
+note_fail() { err "$1"; FAILURES=$((FAILURES + 1)); }
+
+# ---------------------------------------------------------------------------
+# defaults + argument parsing
+# ---------------------------------------------------------------------------
+PROJECT_OVERRIDE=""
+ZONE_OVERRIDE=""
+REGION_OVERRIDE=""
+WORKDIR="${GSP321_WORKDIR:-$HOME/gsp321}"
+WAIT_MINUTES="${GSP321_WAIT_MINUTES:-10}"
+SKIP_MONITOR=0
+SKIP_IAM=0
+
+usage() {
+  cat <<'USAGE_END'
+GSP321 - Develop Your Google Cloud Network
+Google Cloud Arcade / Cloud Skills Boost challenge lab.
+
+QUICK START (Google Cloud Shell):
+   curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp321.sh
+   chmod +x gsp321.sh
+   ./gsp321.sh
+
+Single line, no download:
+   bash <(curl -fsSL https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp321.sh)
+
+OPTIONS:
+   --project ID       GCP project to use        (default: active gcloud project)
+   --zone ZONE        e.g. us-central1-a         (default: $ZONE, else us-central1-a)
+   --region REGION    e.g. us-central1           (default: derived from --zone)
+   --workdir PATH     scratch dir for manifests (default: $HOME/gsp321)
+   --timeout MINUTES  wait time for the GKE LoadBalancer IP (default: 10)
+   --skip-monitor     skip Task 8 (uptime check)
+   --skip-iam         skip Task 9 (promote viewer -> editor)
+   -h, --help         this help
+USAGE_END
+  exit 0
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --project)      PROJECT_OVERRIDE="$2"; shift 2 ;;
+    --zone)         ZONE_OVERRIDE="$2";     shift 2 ;;
+    --region)       REGION_OVERRIDE="$2";   shift 2 ;;
+    --workdir)      WORKDIR="$2";           shift 2 ;;
+    --timeout)      WAIT_MINUTES="$2";      shift 2 ;;
+    --skip-monitor) SKIP_MONITOR=1;         shift ;;
+    --skip-iam)     SKIP_IAM=1;             shift ;;
+    -h|--help)      usage ;;
+    *) echo "Unknown option: $1 (try --help)" >&2; exit 2 ;;
+  esac
+done
+
+# ---------------------------------------------------------------------------
+# resolve project / zone / region
+# ---------------------------------------------------------------------------
+PROJECT_ID="$PROJECT_OVERRIDE"
+if [ -z "$PROJECT_ID" ]; then
+  PROJECT_ID="$(gcloud config get-value project 2>/dev/null)"
+fi
+if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "(unset)" ]; then
+  PROJECT_ID="${DEVSHELL_PROJECT_ID:-}"
+fi
+
+ZONE="${ZONE_OVERRIDE:-${ZONE:-us-central1-a}}"
+REGION="${REGION_OVERRIDE:-${REGION:-${ZONE%-*}}}"
+
+SQL_VERSION="${SQL_VERSION:-MYSQL_5_7}"
+SQL_ROOT_PASSWORD="${SQL_ROOT_PASSWORD:-awesome}"
+SQL_DB="wordpress"
+SQL_USER="wp_user"
+SQL_PASS="stormwind_rules"
+
+CLUSTER="griffin-dev"
+SERVICE="wordpress"
+UPTIME_CHECK="wordpress-uptime-check"
+DEPLOYMENT_MANAGER_NAME="prod-network"
+
+# ---------------------------------------------------------------------------
+# preflight
+# ---------------------------------------------------------------------------
+printf "%s%s  GSP321 - Develop Your Google Cloud Network%s\n" "$C_CYAN" "$C_BOLD" "$C_RESET"
+printf "  %sproject=%s  %szone=%s  %sregion=%s  %sworkdir=%s%s\n" \
+  "$C_DIM" "$PROJECT_ID" "$C_DIM" "$ZONE" "$C_DIM" "$REGION" "$C_DIM" "$WORKDIR" "$C_RESET"
+
+step "Preflight checks"
+
+for bin in gcloud kubectl; do
+  if ! command -v "$bin" >/dev/null 2>&1; then
+    err "$bin not found on PATH. Run this inside Google Cloud Shell."
+    exit 1
+  fi
+done
+ok "gcloud and kubectl are available"
+
+if ! command -v gsutil >/dev/null 2>&1; then
+  warn "gsutil not found - run: gcloud components install gsutil"
+fi
+
+ACTIVE_ACCOUNT="$(gcloud config get-value account 2>/dev/null)"
+if [ -z "$ACTIVE_ACCOUNT" ] || [ "$ACTIVE_ACCOUNT" = "(unset)" ]; then
+  err "No active gcloud account. Run: gcloud auth login"
+  exit 1
+fi
+ok "active account: $ACTIVE_ACCOUNT"
+
+if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "(unset)" ]; then
+  err "No GCP project resolved. Pass --project ID or run: gcloud config set project ID"
+  exit 1
+fi
+
+gcloud config set project "$PROJECT_ID" >/dev/null 2>&1
+ok "project: $PROJECT_ID"
+
+if [ "${CLOUD_SHELL:-}" = "true" ]; then
+  info "running inside Google Cloud Shell"
+else
+  warn "not in Cloud Shell - zone/project defaults may be wrong, use --zone/--project"
+fi
+
+# The lab hands you two accounts. Task 8 and Task 9 both need Editor.
+HAS_EDITOR="$(gcloud projects get-iam-policy "$PROJECT_ID" \
+  --flatten="bindings[].members" \
+  --filter="bindings.role:roles/editor AND bindings.members:user:${ACTIVE_ACCOUNT}" \
+  --format="value(bindings.members)" 2>/dev/null)"
+if [ -n "$HAS_EDITOR" ]; then
+  ok "active account holds roles/editor"
+else
+  warn "active account does NOT hold roles/editor."
+  warn "Task 8 (uptime check) and Task 9 (promote engineer) will fail with PERMISSION_DENIED."
+  warn "Switch to the primary lab account, or grant it yourself:"
+  warn "  gcloud projects add-iam-policy-binding $PROJECT_ID --member=\"user:$ACTIVE_ACCOUNT\" --role=roles/editor"
+fi
+
+mkdir -p "$WORKDIR" || { err "cannot create workdir $WORKDIR"; exit 1; }
+ok "workdir ready: $WORKDIR"
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+ensure_network() {  # $1 = name
+  if gcloud compute networks describe "$1" >/dev/null 2>&1; then
+    ok "network $1 already exists"
+  else
+    if gcloud compute networks create "$1" --subnet-mode custom --quiet >/dev/null 2>&1; then
+      ok "created network $1"
+    else
+      note_fail "could not create network $1"
+    fi
+  fi
+}
+
+ensure_subnet() {   # $1 = name, $2 = cidr, $3 = network
+  if gcloud compute networks subnets describe "$1" --region "$REGION" >/dev/null 2>&1; then
+    ok "subnet $1 already exists"
+  else
+    if gcloud compute networks subnets create "$1" --network="$3" --region "$REGION" \
+         --range="$2" --quiet >/dev/null 2>&1; then
+      ok "created subnet $1 ($2)"
+    else
+      note_fail "could not create subnet $1"
+    fi
+  fi
+}
+
+ensure_firewall() { # $1 = name, $2 = network
+  if gcloud compute firewall-rules describe "$1" >/dev/null 2>&1; then
+    ok "firewall rule $1 already exists"
+  else
+    if gcloud compute firewall-rules create "$1" --source-ranges=0.0.0.0/0 --target-tags ssh \
+         --allow=tcp:22 --network="$2" --quiet >/dev/null 2>&1; then
+      ok "created firewall rule $1"
+    else
+      note_fail "could not create firewall rule $1"
+    fi
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# Task 1 - development VPC
+# ---------------------------------------------------------------------------
+step "Task 1 - Development VPC (manual)"
+ensure_network "griffin-dev-vpc"
+ensure_subnet "griffin-dev-wp"    "192.168.16.0/20" "griffin-dev-vpc"
+ensure_subnet "griffin-dev-mgmt" "192.168.32.0/20" "griffin-dev-vpc"
+
+# ---------------------------------------------------------------------------
+# Task 2 - production VPC via Deployment Manager
+# ---------------------------------------------------------------------------
+step "Task 2 - Production VPC (Deployment Manager)"
+if [ ! -f "$WORKDIR/dm/prod-network.yaml" ]; then
+  gsutil cp -r gs://cloud-training/gsp321/dm "$WORKDIR/" >/dev/null 2>&1 \
+    && ok "fetched dm/ manifests" \
+    || note_fail "could not fetch gs://cloud-training/gsp321/dm"
+fi
+if [ -f "$WORKDIR/dm/prod-network.yaml" ]; then
+  sed -i "s/SET_REGION/$REGION/g" "$WORKDIR/dm/prod-network.yaml"
+  if gcloud deployment-manager deployments describe "$DEPLOYMENT_MANAGER_NAME" >/dev/null 2>&1; then
+    ok "deployment $DEPLOYMENT_MANAGER_NAME already exists"
+  else
+    if gcloud deployment-manager deployments create "$DEPLOYMENT_MANAGER_NAME" \
+         --config="$WORKDIR/dm/prod-network.yaml" --quiet >/dev/null 2>&1; then
+      ok "created deployment $DEPLOYMENT_MANAGER_NAME"
+    else
+      note_fail "could not create deployment $DEPLOYMENT_MANAGER_NAME"
+    fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# Task 3 - bastion host + firewall rules
+# ---------------------------------------------------------------------------
+step "Task 3 - Bastion host"
+if gcloud compute instances describe bastion --zone "$ZONE" >/dev/null 2>&1; then
+  ok "instance bastion already exists"
+else
+  if gcloud compute instances create bastion \
+      --network-interface=network=griffin-dev-vpc,subnet=griffin-dev-mgmt \
+      --network-interface=network=griffin-prod-vpc,subnet=griffin-prod-mgmt \
+      --tags=ssh --zone="$ZONE" --quiet >/dev/null 2>&1; then
+    ok "created bastion"
+  else
+    note_fail "could not create bastion"
+  fi
+fi
+ensure_firewall "fw-ssh-dev"  "griffin-dev-vpc"
+ensure_firewall "fw-ssh-prod" "griffin-prod-vpc"
+
+# ---------------------------------------------------------------------------
+# Task 4 - Cloud SQL for MySQL
+# ---------------------------------------------------------------------------
+step "Task 4 - Cloud SQL instance"
+if gcloud sql instances describe griffin-dev-db >/dev/null 2>&1; then
+  ok "instance griffin-dev-db already exists"
+else
+  info "creating MySQL instance (this takes 2-4 minutes)..."
+  if ! gcloud sql instances create griffin-dev-db \
+        --database-version="$SQL_VERSION" --region="$REGION" \
+        --root-password="$SQL_ROOT_PASSWORD" --quiet >/dev/null 2>&1; then
+    warn "$SQL_VERSION was rejected, retrying with MYSQL_8_0"
+    SQL_VERSION="MYSQL_8_0"
+    gcloud sql instances create griffin-dev-db \
+      --database-version="$SQL_VERSION" --region="$REGION" \
+      --root-password="$SQL_ROOT_PASSWORD" --quiet >/dev/null 2>&1 \
+      && ok "created griffin-dev-db ($SQL_VERSION)" \
+      || note_fail "could not create griffin-dev-db"
+  else
+    ok "created griffin-dev-db ($SQL_VERSION)"
+  fi
+fi
+
+if gcloud sql databases describe "$SQL_DB" --instance=griffin-dev-db >/dev/null 2>&1; then
+  ok "database $SQL_DB already exists"
+else
+  gcloud sql databases create "$SQL_DB" --instance=griffin-dev-db --quiet >/dev/null 2>&1 \
+    && ok "created database $SQL_DB" \
+    || note_fail "could not create database $SQL_DB"
+fi
+
+if gcloud sql users describe "$SQL_USER" --instance=griffin-dev-db >/dev/null 2>&1; then
+  gcloud sql users set-password "$SQL_USER" --instance=griffin-dev-db \
+    --password="$SQL_PASS" --quiet >/dev/null 2>&1
+  ok "reset password for user $SQL_USER"
+else
+  gcloud sql users create "$SQL_USER" --instance=griffin-dev-db \
+    --password="$SQL_PASS" --quiet >/dev/null 2>&1 \
+    && ok "created user $SQL_USER" \
+    || note_fail "could not create user $SQL_USER"
+fi
+
+# ---------------------------------------------------------------------------
+# Task 5 - GKE cluster
+# ---------------------------------------------------------------------------
+step "Task 5 - Kubernetes cluster"
+if gcloud container clusters describe "$CLUSTER" --zone "$ZONE" >/dev/null 2>&1; then
+  ok "cluster $CLUSTER already exists"
+else
+  info "creating GKE cluster (5-10 minutes)..."
+  if gcloud container clusters create "$CLUSTER" \
+      --network griffin-dev-vpc --subnetwork griffin-dev-wp \
+      --machine-type e2-standard-4 --num-nodes 2 --zone "$ZONE" --quiet >/dev/null 2>&1; then
+    ok "created cluster $CLUSTER"
+  else
+    note_fail "could not create cluster $CLUSTER"
+  fi
+fi
+
+gcloud container clusters get-credentials "$CLUSTER" --zone "$ZONE" >/dev/null 2>&1 \
+  && ok "kubectl context pointed at $CLUSTER" \
+  || note_fail "could not get cluster credentials"
+
+# ---------------------------------------------------------------------------
+# Task 6 - prepare the cluster (PVC, secret, cloud-sql-proxy key)
+# ---------------------------------------------------------------------------
+step "Task 6 - Prepare the Kubernetes cluster"
+if [ ! -d "$WORKDIR/wp-k8s" ]; then
+  gsutil cp -r gs://cloud-training/gsp321/wp-k8s "$WORKDIR/" >/dev/null 2>&1 \
+    && ok "fetched wp-k8s/ manifests" \
+    || note_fail "could not fetch gs://cloud-training/gsp321/wp-k8s"
+fi
+
+cat > "$WORKDIR/wp-k8s/wp-env.yaml" <<EOF_END
+kind: PersistentVolumeClaim
+apiVersion: v1
+metadata:
+  name: wordpress-volumeclaim
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 200Gi
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: database
+type: Opaque
+stringData:
+  username: $SQL_USER
+  password: $SQL_PASS
+EOF_END
+ok "wrote wp-env.yaml (PVC + db secret)"
+
+kubectl apply -f "$WORKDIR/wp-k8s/wp-env.yaml" >/dev/null 2>&1 \
+  && ok "applied wp-env.yaml" \
+  || note_fail "could not apply wp-env.yaml"
+
+SA_NAME="cloud-sql-proxy"
+SA_EMAIL="${SA_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
+if gcloud iam service-accounts describe "$SA_EMAIL" >/dev/null 2>&1; then
+  ok "service account $SA_EMAIL already exists"
+else
+  gcloud iam service-accounts create "$SA_NAME" \
+    --display-name="Cloud SQL Proxy" --project="$PROJECT_ID" >/dev/null 2>&1
+  gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+    --member="serviceAccount:$SA_EMAIL" --role="roles/cloudsql.client" --quiet >/dev/null 2>&1
+  ok "created service account $SA_EMAIL with roles/cloudsql.client"
+fi
+
+KEY_FILE="$WORKDIR/wp-k8s/key.json"
+if [ -s "$KEY_FILE" ]; then
+  ok "reusing existing key.json (service account keys cannot be re-downloaded)"
+else
+  if gcloud iam service-accounts keys create "$KEY_FILE" --iam-account="$SA_EMAIL" \
+       --key-file-type=json >/dev/null 2>&1; then
+    ok "created service account key"
+  else
+    note_fail "could not create service account key (org IAM policy may block it)"
+  fi
+fi
+
+if [ -s "$KEY_FILE" ]; then
+  kubectl create secret generic cloudsql-instance-credentials \
+    --from-file="key.json=$KEY_FILE" --dry-run=client -o yaml 2>/dev/null \
+    | kubectl apply -f - >/dev/null 2>&1 \
+    && ok "applied secret cloudsql-instance-credentials" \
+    || note_fail "could not apply secret cloudsql-instance-credentials"
+fi
+
+# ---------------------------------------------------------------------------
+# Task 7 - WordPress deployment + service
+# ---------------------------------------------------------------------------
+step "Task 7 - WordPress deployment"
+INSTANCE_ID="$(gcloud sql instances describe griffin-dev-db --format='value(connectionName)' 2>/dev/null)"
+if [ -z "$INSTANCE_ID" ]; then
+  note_fail "could not resolve griffin-dev-db connection name"
+else
+  ok "instance connection name: $INSTANCE_ID"
+  if [ -f "$WORKDIR/wp-k8s/wp-deployment.yaml" ]; then
+    sed -i "s/YOUR_SQL_INSTANCE/$INSTANCE_ID/g" "$WORKDIR/wp-k8s/wp-deployment.yaml"
+    kubectl apply -f "$WORKDIR/wp-k8s/wp-deployment.yaml" >/dev/null 2>&1 \
+      && ok "applied wp-deployment.yaml" \
+      || note_fail "could not apply wp-deployment.yaml"
+  else
+    note_fail "wp-deployment.yaml missing from $WORKDIR/wp-k8s"
+  fi
+fi
+
+if [ -f "$WORKDIR/wp-k8s/wp-service.yaml" ]; then
+  kubectl apply -f "$WORKDIR/wp-k8s/wp-service.yaml" >/dev/null 2>&1 \
+    && ok "applied wp-service.yaml" \
+    || note_fail "could not apply wp-service.yaml"
+else
+  note_fail "wp-service.yaml missing from $WORKDIR/wp-k8s"
+fi
+
+# ---------------------------------------------------------------------------
+# Task 8 - monitoring (uptime check)
+#   THE FIX: wait for the LoadBalancer external IP, and send project_id.
+# ---------------------------------------------------------------------------
+if [ "$SKIP_MONITOR" -eq 1 ]; then
+  step "Task 8 - Uptime check  (skipped via --skip-monitor)"
+else
+  step "Task 8 - Uptime check"
+
+  gcloud services enable monitoring.googleapis.com --quiet >/dev/null 2>&1
+  info "monitoring API enabled"
+
+  DEADLINE=$(( $(date +%s) + WAIT_MINUTES * 60 ))
+  WP_IP=""
+  ATTEMPT=0
+  while [ "$(date +%s)" -lt "$DEADLINE" ]; do
+    ATTEMPT=$((ATTEMPT + 1))
+    WP_IP="$(kubectl get svc "$SERVICE" -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null)"
+    if [ -n "$WP_IP" ]; then
+      break
+    fi
+    if [ $((ATTEMPT % 4)) -eq 1 ]; then
+      dim "waiting for the GKE LoadBalancer IP (attempt $ATTEMPT)..."
+    fi
+    sleep 15
+  done
+
+  if [ -z "$WP_IP" ]; then
+    note_fail "no external IP on service/$SERVICE after ${WAIT_MINUTES} min"
+    echo ""
+    dim "  Diagnostics:"
+    dim "    kubectl get svc $SERVICE -o wide"
+    dim "    kubectl describe svc $SERVICE | tail -25"
+    dim "    kubectl get pods -o wide"
+    dim "    kubectl get pvc"
+    echo ""
+    dim "  Common causes: pods not Ready (check the cloudsql-proxy sidecar),"
+    dim "  PVC stuck Pending, or the cluster was created in the wrong subnet."
+    dim "  Re-run ./gsp321.sh once the pod is Running - it is idempotent."
+  else
+    ok "LoadBalancer external IP: $WP_IP"
+
+    if gcloud monitoring uptime describe "$UPTIME_CHECK" >/dev/null 2>&1; then
+      info "uptime check '$UPTIME_CHECK' already exists - deleting and recreating"
+      gcloud monitoring uptime delete "$UPTIME_CHECK" --quiet >/dev/null 2>&1
+      sleep 5
+    fi
+
+    if gcloud monitoring uptime create "$UPTIME_CHECK" \
+         --resource-type=uptime-url \
+         --resource-labels="host=${WP_IP},project_id=${PROJECT_ID}" >/dev/null 2>&1; then
+      ok "created uptime check '$UPTIME_CHECK'"
+    else
+      note_fail "uptime check creation failed - retrying with a full URL"
+      gcloud monitoring uptime create "$UPTIME_CHECK" \
+        --resource-type=uptime-url \
+        --resource-labels="host=http://${WP_IP}/,project_id=${PROJECT_ID}" >/dev/null 2>&1 \
+        && ok "created uptime check '$UPTIME_CHECK' (URL form)" \
+        || note_fail "could not create uptime check"
+    fi
+
+    echo ""
+    gcloud monitoring uptime list-configs \
+      --format="table(name.basename(), resourceLabels.host, resourceLabels.project_id)" 2>/dev/null
+    echo ""
+    dim "  Console: Monitoring -> Uptime checks -> $UPTIME_CHECK"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# Task 9 - promote the additional engineer
+# ---------------------------------------------------------------------------
+if [ "$SKIP_IAM" -eq 1 ]; then
+  step "Task 9 - Additional engineer access  (skipped via --skip-iam)"
+else
+  step "Task 9 - Provide access for an additional engineer"
+
+  VIEWERS="$(gcloud projects get-iam-policy "$PROJECT_ID" \
+    --flatten="bindings[].members" \
+    --filter="bindings.role:roles/viewer" \
+    --format="value(bindings.members)" 2>/dev/null)"
+
+  PROMOTED=0
+  for MEMBER in $VIEWERS; do
+    case "$MEMBER" in
+      user:*)
+        EMAIL="${MEMBER#user:}"
+        gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+          --member="user:$EMAIL" --role=roles/editor --quiet >/dev/null 2>&1 \
+          && { ok "granted roles/editor to $EMAIL"; PROMOTED=$((PROMOTED + 1)); } \
+          || note_fail "could not grant editor to $EMAIL"
+        ;;
+      *) dim "skipping non-user member: $MEMBER" ;;
+    esac
+  done
+
+  if [ "$PROMOTED" -eq 0 ]; then
+    info "no roles/viewer users left to promote (Task 9 already done?)"
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# summary
+# ---------------------------------------------------------------------------
+step "Summary"
+echo "  Project : $PROJECT_ID"
+echo "  Region  : $REGION"
+echo "  Zone    : $ZONE"
+echo "  Workdir : $WORKDIR"
+echo ""
+if [ "$FAILURES" -eq 0 ]; then
+  printf "  %sAll steps completed.%s\n" "$C_GREEN" "$C_RESET"
+else
+  printf "  %s%s step(s) reported a failure - see [FAIL] lines above.%s\n" "$C_RED" "$FAILURES" "$C_RESET"
+fi
+echo ""
+echo "  Verify each task in the lab console with 'Check my progress'."
+echo "  Quick self-checks:"
+echo "    gcloud compute networks list"
+echo "    gcloud sql instances list"
+echo "    gcloud container clusters list"
+echo "    kubectl get svc $SERVICE -o wide"
+echo "    gcloud monitoring uptime list-configs"
+echo "    gcloud projects get-iam-policy $PROJECT_ID --flatten='bindings[].members' --filter='bindings.role:roles/editor' --format='value(bindings.members)'"
+echo ""
+dim "  Cloud Monitoring console: https://console.cloud.google.com/monitoring/uptime"
+dim "  WordPress site: http://<EXTERNAL-IP> once the pod reports Running"
+echo ""
