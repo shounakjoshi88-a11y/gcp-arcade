@@ -519,27 +519,75 @@ if [ "$SKIP_IAM" -eq 1 ]; then
 else
   step "Task 9 - Provide access for an additional engineer"
 
+  # Collect the members that currently hold roles/viewer.
+  # Preferred path: let gcloud flatten the policy for us.
   VIEWERS="$(gcloud projects get-iam-policy "$PROJECT_ID" \
     --flatten="bindings[].members" \
     --filter="bindings.role:roles/viewer" \
     --format="value(bindings.members)" 2>/dev/null)"
 
-  PROMOTED=0
-  for MEMBER in $VIEWERS; do
-    case "$MEMBER" in
-      user:*)
-        EMAIL="${MEMBER#user:}"
-        gcloud projects add-iam-policy-binding "$PROJECT_ID" \
-          --member="user:$EMAIL" --role=roles/editor --quiet >/dev/null 2>&1 \
-          && { ok "granted roles/editor to $EMAIL"; PROMOTED=$((PROMOTED + 1)); } \
-          || note_fail "could not grant editor to $EMAIL"
-        ;;
-      *) dim "skipping non-user member: $MEMBER" ;;
-    esac
-  done
+  # Sanity check: the output must be a list of member strings, not raw JSON.
+  if printf '%s' "$VIEWERS" | grep -q '^[{\[]'; then
+    warn "flattened IAM query returned raw JSON - parsing the policy directly"
+    VIEWERS=""
+    RAW_POLICY="$(gcloud projects get-iam-policy "$PROJECT_ID" --format=json 2>/dev/null)"
+    if command -v jq >/dev/null 2>&1; then
+      VIEWERS="$(printf '%s' "$RAW_POLICY" \
+        | jq -r '.bindings[]? | select(.role == "roles/viewer") | .members[]?' 2>/dev/null)"
+    fi
+  fi
 
-  if [ "$PROMOTED" -eq 0 ]; then
-    info "no roles/viewer users left to promote (Task 9 already done?)"
+  # Keep only well-formed member strings - anything else is parse garbage.
+  VIEWERS="$(printf '%s' "$VIEWERS" | grep -E '^[a-zA-Z0-9._-]+:[^ ]+$' || true)"
+
+  if [ -z "$VIEWERS" ]; then
+    warn "could not determine who still holds roles/viewer"
+    note_fail "Task 9 skipped: IAM policy could not be parsed"
+    dim "  run this by hand:"
+    dim "    gcloud projects get-iam-policy $PROJECT_ID \\"
+    dim "      --flatten='bindings[].members' --filter='bindings.role:roles/viewer' \\"
+    dim "      --format='value(bindings.members)'"
+  else
+    PROMOTED=0
+    SKIPPED=0
+    for MEMBER in $VIEWERS; do
+      case "$MEMBER" in
+        user:*)
+          EMAIL="${MEMBER#user:}"
+          if gcloud projects add-iam-policy-binding "$PROJECT_ID" \
+               --member="user:$EMAIL" --role=roles/editor --quiet >/dev/null 2>&1; then
+            ok "granted roles/editor to $EMAIL"
+            PROMOTED=$((PROMOTED + 1))
+          else
+            note_fail "could not grant editor to $EMAIL"
+          fi
+          ;;
+        *)
+          dim "skipping non-user member: $MEMBER"
+          SKIPPED=$((SKIPPED + 1))
+          ;;
+      esac
+    done
+
+    if [ "$PROMOTED" -eq 0 ] && [ "$SKIPPED" -eq 0 ]; then
+      info "no roles/viewer users left to promote (Task 9 already done?)"
+    fi
+
+    # Verify: no user account should still be sitting on roles/viewer.
+    CHECK_RAW="$(gcloud projects get-iam-policy "$PROJECT_ID" \
+      --flatten="bindings[].members" \
+      --filter="bindings.role=roles/viewer" \
+      --format="value(bindings.members)" 2>/dev/null)"
+    if printf '%s' "$CHECK_RAW" | grep -q '^[{\[]'; then
+      warn "could not re-read the IAM policy to verify Task 9"
+    else
+      REMAINING="$(printf '%s' "$CHECK_RAW" | grep -E '^user:[^ ]+$' || true)"
+      if [ -n "$REMAINING" ]; then
+        note_fail "users still holding roles/viewer: $(echo $REMAINING | tr '\n' ' ')"
+      else
+        ok "no user accounts left with roles/viewer"
+      fi
+    fi
   fi
 fi
 
@@ -570,3 +618,6 @@ echo ""
 dim "  Cloud Monitoring console: https://console.cloud.google.com/monitoring/uptime"
 dim "  WordPress site: http://<EXTERNAL-IP> once the pod reports Running"
 echo ""
+
+# Non-zero exit when any step failed, so this is safe to use in automation.
+exit "$([ "$FAILURES" -eq 0 ] && echo 0 || echo 1)"

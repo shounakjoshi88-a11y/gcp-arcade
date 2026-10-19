@@ -37,6 +37,11 @@ bash <(curl -fsSL https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arca
 
 Hit **Check my progress** on each task in the lab console as it turns green.
 
+The script is **idempotent** — re-run it after any failure and it skips what
+already exists. It exits `0` when every step succeeded and `1` if any step
+reported a failure (the failure is printed as a `[FAIL]` line, and the rest of
+the lab still runs).
+
 ### Options
 
 | Flag | Default | What it does |
