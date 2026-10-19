@@ -69,6 +69,7 @@ THIRD_INSTANCE="tf-instance-3"
 ONLY_TASK=""
 ASSUME_YES=0
 SKIP_INSTALL=0
+RECREATE_INSTANCES=0
 
 usage() {
   cat <<'USAGE_END'
@@ -89,6 +90,7 @@ OPTIONS:
    --instance NAME   third instance name (default: tf-instance-3)
    --task N          run only task N (1-7)
    --yes             do not pause between tasks
+   --recreate-instances  recreate tf-instance-1/2 if they are missing
    --skip-install    assume terraform is already on PATH
    -h, --help        this help
 USAGE_END
@@ -107,6 +109,7 @@ while [ $# -gt 0 ]; do
     --task)         ONLY_TASK="$2";         shift 2 ;;
     --yes)          ASSUME_YES=1;           shift ;;
     --skip-install) SKIP_INSTALL=1;         shift ;;
+    --recreate-instances) RECREATE_INSTANCES=1; shift ;;
     -h|--help)      usage ;;
     *) echo "Unknown option: $1 (try --help)" >&2; exit 2 ;;
   esac
@@ -143,6 +146,10 @@ ok "gcloud is available"
 gcloud config set project "$PROJECT_ID" >/dev/null 2>&1
 ok "project: $PROJECT_ID"
 
+# created early - the zone is recorded here so a later run can still find it
+# even if the lab's instances are gone
+mkdir -p "$WORKDIR" || { err "cannot create workdir $WORKDIR"; exit 1; }
+
 if [ "${CLOUD_SHELL:-}" = "true" ]; then
   info "running inside Google Cloud Shell"
 else
@@ -159,18 +166,27 @@ inst_field() {  # $1 = instance name, $2 = format
 }
 
 ZONE="$ZONE_OVERRIDE"
+ZONE_SOURCE="the --zone flag"
+ZONE_SAVED_FILE="$WORKDIR/.gsp345-zone"
 if [ -z "$ZONE" ]; then
   for N in tf-instance-1 tf-instance-2; do
     Z="$(gcloud compute instances list --project "$PROJECT_ID" \
           --filter="name=$N" --format="value(zone)" 2>/dev/null \
           | head -1 | sed 's|.*/||')"
-    if [ -n "$Z" ]; then ZONE="$Z"; break; fi
+    if [ -n "$Z" ]; then ZONE="$Z"; ZONE_SOURCE="the lab's pre-created instances"; break; fi
   done
+fi
+if [ -z "$ZONE" ] && [ -f "$ZONE_SAVED_FILE" ]; then
+  ZONE="$(cat "$ZONE_SAVED_FILE" 2>/dev/null)"
+  ZONE_SOURCE="the zone recorded by an earlier run"
 fi
 
 if [ -z "$ZONE" ]; then
   err "could not find the lab's pre-created instances tf-instance-1 / tf-instance-2"
-  err "start the lab first - it creates them for you - or pass --zone"
+  err "start the lab first - it creates them for you - or pass --zone <zone>"
+  echo ""
+  dim "  if a previous run deleted them, recover with:"
+  dim "    ./gsp345.sh --zone <zone> --recreate-instances"
   exit 1
 fi
 if [ -n "$ZONE_OVERRIDE" ]; then
@@ -178,50 +194,77 @@ if [ -n "$ZONE_OVERRIDE" ]; then
 else
   REGION="${REGION_OVERRIDE:-${ZONE%-*}}"
 fi
-ok "lab zone: $ZONE   region: $REGION"
+ok "lab zone: $ZONE   region: $REGION   (from $ZONE_SOURCE)"
+echo "$ZONE" > "$ZONE_SAVED_FILE"
 
-INST1_ID="$(inst_field tf-instance-1 'value(id)')"
-INST2_ID="$(inst_field tf-instance-2 'value(id)')"
-
-# machine type and boot disk image of the pre-created instances.
-#
-# IMPORTANT: an instance's disks[0].source is the DISK, not the image. The
-# image lives on the disk as sourceImage, so the disk has to be looked up
+# Read everything the configuration has to match from the lab's own
+# instances. NOTE: an instance's disks[0].source is the DISK, not the image.
+# The image lives on the disk as sourceImage, so the disk has to be looked up
 # separately. Getting this wrong makes Terraform plan a replacement, and
 # because boot_disk.initialize_params.image is ForceNew it then DELETES the
 # instance and fails to recreate it.
-MACHINE_TYPE="$(inst_field tf-instance-1 'value(machineType)' | sed 's|.*/||')"
-[ -z "$MACHINE_TYPE" ] && MACHINE_TYPE="e2-micro"
+read_instance_facts() {
+  INST1_ID="$(inst_field tf-instance-1 'value(id)')"
+  INST2_ID="$(inst_field tf-instance-2 'value(id)')"
 
-IMAGE=""
-DISK_URL="$(inst_field tf-instance-1 'value(disks[0].source)')"
-DISK_NAME="$(basename "$DISK_URL")"
-if [ -n "$DISK_NAME" ]; then
-  IMAGE_URL="$(gcloud compute disks describe "$DISK_NAME" --zone "$ZONE" \
-    --project "$PROJECT_ID" --format="value(sourceImage)" 2>/dev/null)"
-  IMAGE="$(printf '%s' "$IMAGE_URL" \
-    | sed -e 's|.*/projects/||' -e 's|/global/images/|/|')"
-fi
-if [ -z "$IMAGE" ]; then
-  # the licence is the image family, e.g. debian-cloud/debian-12
-  IMAGE="$(inst_field tf-instance-1 'value(disks[0].licenses[0])')"
-fi
-# Sanity check: never accept a disk or a zone path as an image.
-case "$IMAGE" in
-  */zones/*|*/disks/*|*/instances/*|"") IMAGE="" ;;
-esac
-[ -z "$IMAGE" ] && IMAGE="debian-12"
+  MACHINE_TYPE="$(inst_field tf-instance-1 'value(machineType)' | sed 's|.*/||')"
+  [ -z "$MACHINE_TYPE" ] && MACHINE_TYPE="${GSP345_MACHINE_TYPE:-e2-micro}"
+
+  IMAGE=""
+  DISK_URL="$(inst_field tf-instance-1 'value(disks[0].source)')"
+  DISK_NAME="$(basename "$DISK_URL")"
+  if [ -n "$DISK_NAME" ]; then
+    IMAGE_URL="$(gcloud compute disks describe "$DISK_NAME" --zone "$ZONE" \
+      --project "$PROJECT_ID" --format="value(sourceImage)" 2>/dev/null)"
+    IMAGE="$(printf '%s' "$IMAGE_URL" \
+      | sed -e 's|.*/projects/||' -e 's|/global/images/|/|')"
+  fi
+  if [ -z "$IMAGE" ]; then
+    # the licence is the image family, e.g. debian-cloud/debian-12
+    IMAGE="$(inst_field tf-instance-1 'value(disks[0].licenses[0])')"
+  fi
+  # Sanity check: never accept a disk or a zone path as an image.
+  case "$IMAGE" in
+    */zones/*|*/disks/*|*/instances/*|"") IMAGE="" ;;
+  esac
+  [ -z "$IMAGE" ] && IMAGE="debian-12"
+}
+
+read_instance_facts
 ok "existing machine type: $MACHINE_TYPE"
 ok "existing boot disk image: $IMAGE"
 
-if [ -z "$INST1_ID" ] || [ -z "$INST2_ID" ]; then
-  err "could not find the lab's pre-created instances tf-instance-1 / tf-instance-2"
-  echo ""
-  dim "  Either the lab has not started yet, or a previous run deleted them."
-  dim "  If they are gone, recreate them and re-run this script:"
-  dim "    gcloud compute instances create tf-instance-1 --zone=$ZONE --machine-type=$MACHINE_TYPE --image-family=debian-12 --image-project=debian-cloud"
-  dim "    gcloud compute instances create tf-instance-2 --zone=$ZONE --machine-type=$MACHINE_TYPE --image-family=debian-12 --image-project=debian-cloud"
-  exit 1
+# --- recreate the pre-created instances if asked -------------------------
+if [ "$RECREATE_INSTANCES" = "1" ]; then
+  printf '#!/bin/bash\n' > "$WORKDIR/startup.sh"
+  for N in tf-instance-1 tf-instance-2; do
+    if gcloud compute instances describe "$N" --zone "$ZONE" --project "$PROJECT_ID" >/dev/null 2>&1; then
+      ok "$N already exists"
+      continue
+    fi
+    info "creating $N ($MACHINE_TYPE) in $ZONE"
+    if printf '%s' "$IMAGE" | grep -qE '^debian-[0-9]+$'; then
+      CREATE_IMG=(--image-family="$IMAGE" --image-project=debian-cloud)
+    else
+      CREATE_IMG=(--image="$IMAGE")
+    fi
+    if gcloud compute instances create "$N" --zone "$ZONE" --project "$PROJECT_ID" \
+         --machine-type="$MACHINE_TYPE" "${CREATE_IMG[@]}" \
+         --metadata-from-file "startup-script=$WORKDIR/startup.sh" >/dev/null 2>&1; then
+      ok "created $N"
+    else
+      note_fail "could not create $N"
+    fi
+  done
+  info "waiting for the instances to finish starting"
+  for i in $(seq 1 60); do
+    ST="$(inst_field tf-instance-1 'value(status)')"
+    [ "$ST" = "RUNNING" ] && break
+    sleep 5
+  done
+  read_instance_facts
+  ok "recovered machine type: $MACHINE_TYPE"
+  ok "recovered boot disk image: $IMAGE"
 fi
 ok "tf-instance-1 id: $INST1_ID"
 ok "tf-instance-2 id: $INST2_ID"
@@ -241,7 +284,6 @@ BUCKET_NAME="${BUCKET_OVERRIDE:-$PROJECT_ID}"
 ok "remote backend bucket: $BUCKET_NAME"
 ok "vpc name: $VPC_NAME    third instance: $THIRD_INSTANCE"
 
-mkdir -p "$WORKDIR" || { err "cannot create workdir $WORKDIR"; exit 1; }
 PROGRESS_FILE="$WORKDIR/.gsp345-progress"
 ok "workdir ready: $WORKDIR"
 

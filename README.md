@@ -374,8 +374,29 @@ instead of half-way through a task with a broken `apply`.
 | `--instance NAME` | `tf-instance-3` | Third instance name |
 | `--task N` | all | Run only task N (1–7) |
 | `--yes` | off | Do not pause between tasks |
+| `--recreate-instances` | off | Recreate `tf-instance-1`/`tf-instance-2` if they are missing |
 | `--skip-install` | off | Assume terraform is already on PATH |
 | `-h, --help` | | Usage |
+
+### Recovering from a deleted instance
+
+If a run ever deletes the lab's instances (a mismatched `boot_disk` image
+makes Terraform plan a replacement, and a replacement deletes before it
+recreates), the script can bring them back:
+
+```bash
+./gsp345.sh --zone us-west4-b --recreate-instances
+```
+
+The zone is recorded in `~/gsp345/.gsp345-zone` on every run, so after the
+first successful run you can usually just use:
+
+```bash
+./gsp345.sh --recreate-instances
+```
+
+The instances are recreated with the machine type and image read from the
+lab, then imported as normal.
 
 ---
 
