@@ -19,6 +19,7 @@
 #     --region2 R       region for mynet-r2-vm
 #     --zone2 Z         zone for mynet-r2-vm
 #     --network NAME    VPC network name (default: mynetwork)
+#     --workdir PATH    where the logs are written (default: $HOME/gsp-vpc)
 #     --task N          run only task N (1-3)
 #     --yes             do not pause for the checkpoint
 #     -h, --help        this help
@@ -59,6 +60,7 @@ ZONE1_OVERRIDE=""
 REGION2_OVERRIDE=""
 ZONE2_OVERRIDE=""
 NETWORK="mynetwork"
+WORKDIR="${GSP_VPC_WORKDIR:-$HOME/gsp-vpc}"
 VM1="mynet-us-vm"
 VM2="mynet-r2-vm"
 MACHINE_TYPE="e2-micro"
@@ -87,6 +89,7 @@ OPTIONS:
    --region2 R       region for mynet-r2-vm
    --zone2 Z         zone for mynet-r2-vm
    --network NAME    VPC network name (default: mynetwork)
+   --workdir PATH    where the logs are written (default: $HOME/gsp-vpc)
    --task N          run only task N (1-3)
    --yes             do not pause for the checkpoint
    -h, --help        this help
@@ -102,6 +105,7 @@ while [ $# -gt 0 ]; do
     --region2)  REGION2_OVERRIDE="$2"; shift 2 ;;
     --zone2)    ZONE2_OVERRIDE="$2";   shift 2 ;;
     --network)  NETWORK="$2";          shift 2 ;;
+    --workdir)  WORKDIR="$2";           shift 2 ;;
     --task)     ONLY_TASK="$2";        shift 2 ;;
     --yes)      ASSUME_YES=1;          shift ;;
     -h|--help)  usage ;;
@@ -163,6 +167,9 @@ else
   warn "not in Cloud Shell - the zones may be wrong, use --region1/--zone1/--region2/--zone2"
 fi
 
+mkdir -p "$WORKDIR" || { err "cannot create workdir $WORKDIR"; exit 1; }
+ok "workdir ready: $WORKDIR"
+
 info "enabling the Compute Engine API"
 gcloud services enable compute.googleapis.com --quiet >/dev/null 2>&1
 ok "API enabled"
@@ -182,6 +189,38 @@ inst_ip() {  # $1 = name, $2 = zone, $3 = internal|external
     gcloud compute instances describe "$1" --zone "$2" --project "$PROJECT_ID" \
       --format="value(networkInterfaces[0].accessConfigs[0].natIP)" 2>/dev/null
   fi
+}
+
+# An auto mode network creates its subnets and its firewall rules
+# asynchronously, so they are not there the instant the network is.
+wait_for_network() {  # $1 = network name
+  local i n
+  for i in $(seq 1 "${GSP_NETWORK_WAIT:-40}"); do
+    n="$(gcloud compute firewall-rules list --filter="network=$1" \
+          --project "$PROJECT_ID" --format="value(name)" 2>/dev/null | wc -l | tr -d ' ')"
+    if [ "${n:-0}" -ge 4 ]; then
+      ok "the network is ready ($n firewall rules)"
+      return 0
+    fi
+    sleep 5
+  done
+  warn "the network did not report 4 firewall rules in time"
+  return 1
+}
+
+wait_for_subnet() {  # $1 = network, $2 = region
+  local i
+  for i in $(seq 1 "${GSP_SUBNET_WAIT:-40}"); do
+    if gcloud compute networks subnets list --network="$1" \
+         --filter="region=$2" --project "$PROJECT_ID" \
+         --format="value(name)" 2>/dev/null | grep -q .; then
+      ok "the $2 subnet exists"
+      return 0
+    fi
+    sleep 5
+  done
+  warn "the $2 subnet did not appear in time"
+  return 1
 }
 
 wait_running() {  # $1 = name, $2 = zone
@@ -274,9 +313,16 @@ task2() {
     fi
   fi
 
+  info "waiting for the network to be ready"
+  wait_for_network "$NETWORK"
+
   info "the auto mode network comes with the standard firewall rules:"
   gcloud compute firewall-rules list --filter="network=$NETWORK" --project "$PROJECT_ID" \
     --format="value(name)" 2>/dev/null | sed 's/^/    /'
+
+  info "waiting for the subnets in $REGION1 and $REGION2"
+  wait_for_subnet "$NETWORK" "$REGION1"
+  wait_for_subnet "$NETWORK" "$REGION2"
 
   create_vm() {  # $1 = name, $2 = zone
     if instance_exists "$1" "$2"; then
@@ -284,15 +330,18 @@ task2() {
       return 0
     fi
     info "creating $1 in $2 ($MACHINE_TYPE)"
+    VM_LOG="$WORKDIR/vm-$1.log"
     if gcloud compute instances create "$1" \
          --zone="$2" --project="$PROJECT_ID" \
          --machine-type="$MACHINE_TYPE" \
          --image-family="debian-12" --image-project="debian-cloud" \
          --network="$NETWORK" --subnet="default" --tags="$NETWORK" \
-         --quiet >/dev/null 2>&1; then
+         --quiet > "$VM_LOG" 2>&1; then
       ok "created $1"
     else
       note_fail "could not create $1"
+      grep -oE '"message": *"[^"]{0,220}' "$VM_LOG" | head -3 | sed 's/^/    /'
+      tail -6 "$VM_LOG" | sed 's/^/    /'
       return 1
     fi
   }
