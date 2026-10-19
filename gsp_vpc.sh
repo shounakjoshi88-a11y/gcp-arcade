@@ -211,16 +211,44 @@ wait_for_network() {  # $1 = network name
 wait_for_subnet() {  # $1 = network, $2 = region
   local i
   for i in $(seq 1 "${GSP_SUBNET_WAIT:-40}"); do
+    # an auto mode network names its subnet "default" in every region
     if gcloud compute networks subnets list --network="$1" \
          --filter="region=$2" --project "$PROJECT_ID" \
-         --format="value(name)" 2>/dev/null | grep -q .; then
-      ok "the $2 subnet exists"
+         --format="value(name)" 2>/dev/null | grep -qx "default"; then
+      ok "the $2/default subnet exists"
       return 0
     fi
     sleep 5
   done
-  warn "the $2 subnet did not appear in time"
+  warn "the $2/default subnet did not appear in time - subnets in that network:"
+  gcloud compute networks subnets list --network="$1" --project "$PROJECT_ID" \
+    --format="table(name,region,ipCidrRange)" 2>/dev/null | sed 's/^/    /'
   return 1
+}
+
+# The console creates these four rules when you tick every box on an auto
+# mode network. The API does not always add them, so create them explicitly
+# and make sure the names match the ones the lab talks about.
+create_firewall_rules() {
+  local net="$1"
+  make_rule() {  # $1 = name, $2 = allow, $3 = source ranges
+    if rule_exists "$1"; then
+      ok "firewall rule $1 already exists"
+      return 0
+    fi
+    if gcloud compute firewall-rules create "$1" --network="$net" \
+         --allow="$2" --source-ranges="$3" --direction=INGRESS --priority=1000 \
+         --project "$PROJECT_ID" --quiet >/dev/null 2>&1; then
+      ok "created firewall rule $1 ($2 from $3)"
+    else
+      note_fail "could not create the firewall rule $1"
+      return 1
+    fi
+  }
+  make_rule "$net-allow-icmp"   "icmp"          "0.0.0.0/0"
+  make_rule "$net-allow-custom" "tcp,udp,icmp"  "10.128.0.0/9"
+  make_rule "$net-allow-rdp"    "tcp:3389"      "0.0.0.0/0"
+  make_rule "$net-allow-ssh"    "tcp:22"        "0.0.0.0/0"
 }
 
 wait_running() {  # $1 = name, $2 = zone
@@ -313,10 +341,10 @@ task2() {
     fi
   fi
 
-  info "waiting for the network to be ready"
-  wait_for_network "$NETWORK"
+  info "creating the standard firewall rules"
+  create_firewall_rules "$NETWORK"
 
-  info "the auto mode network comes with the standard firewall rules:"
+  info "the network's firewall rules:"
   gcloud compute firewall-rules list --filter="network=$NETWORK" --project "$PROJECT_ID" \
     --format="value(name)" 2>/dev/null | sed 's/^/    /'
 
