@@ -268,7 +268,7 @@ write_dm_config() {
     echo "    # the GCE instance name, not just the Deployment Manager resource id"
     echo "    name: $INSTANCE_NAME"
     echo "    zone: $ZONE"
-    echo "    machineType: $MACHINE_TYPE"
+    echo "    machineType: zones/$ZONE/machineTypes/$MACHINE_TYPE"
     echo "    canIpForward: false"
     echo "    disks:"
     echo "    - deviceName: persistent-disk-0"
@@ -278,7 +278,7 @@ write_dm_config() {
     echo "      initializeParams:"
     echo "        sourceImage: projects/debian-cloud/global/images/family/$IMAGE"
     echo "    networkInterfaces:"
-    echo "    - network: default"
+    echo "    - network: global/networks/default"
     echo "      accessConfigs:"
     echo "      - name: External NAT"
     echo "        type: ONE_TO_ONE_NAT"
@@ -291,7 +291,7 @@ write_dm_config() {
     echo "- name: $DEPLOYMENT-allow-http"
     echo "  type: compute.v1.firewall"
     echo "  properties:"
-    echo "    network: default"
+    echo "    network: global/networks/default"
     echo "    sourceRanges:"
     echo "    - 0.0.0.0/0"
     echo "    allowed:"
@@ -376,6 +376,26 @@ else
   write_dm_config
   ok "wrote $WORKDIR/lamp.yaml"
 
+  # Validate the configuration against the API before creating anything.
+  # A wrong field form - a short machineType, a short network name - is only
+  # caught here, and a preview creates no resources at all.
+  info "validating the configuration with a deployment preview"
+  PREVIEW_OUT="$WORKDIR/dm-preview.log"
+  if gcloud deployment-manager deployments create "$DEPLOYMENT" \
+        --config="$WORKDIR/lamp.yaml" --project="$PROJECT_ID" \
+        --labels="marketplace-suppress-benign-warnings=true" \
+        --preview > "$PREVIEW_OUT" 2>&1; then
+    ok "the configuration is valid"
+  elif grep -qiE 'malformed|INVALID_FIELD_VALUE|RESOURCE_ERROR|Bad Request' "$PREVIEW_OUT"; then
+    note_fail "the API rejected the configuration - nothing was created"
+    grep -oE '"message":"[^"]{0,200}' "$PREVIEW_OUT" | head -4 | sed 's/^/    /'
+    dim "  the full log is in $PREVIEW_OUT"
+    exit 1
+  else
+    warn "the preview did not complete cleanly - continuing anyway"
+    tail -8 "$PREVIEW_OUT" | sed 's/^/    /'
+  fi
+
   info "creating the deployment '$DEPLOYMENT' (this takes a few minutes)"
   DM_OUT="$WORKDIR/dm.log"
   if gcloud deployment-manager deployments create "$DEPLOYMENT" \
@@ -383,20 +403,24 @@ else
         --labels="marketplace-suppress-benign-warnings=true" \
         > "$DM_OUT" 2>&1; then
     ok "deployment $DEPLOYMENT created"
-  else
-    if grep -q "already exists" "$DM_OUT"; then
-      warn "deployment $DEPLOYMENT already exists - updating it instead"
-      gcloud deployment-manager deployments update "$DEPLOYMENT" \
-        --config="$WORKDIR/lamp.yaml" --project="$PROJECT_ID" \
-        --labels="marketplace-suppress-benign-warnings=true" >> "$DM_OUT" 2>&1 \
-        && ok "deployment updated" \
-        || note_fail "could not update the deployment"
+  elif grep -qi "already exists" "$DM_OUT"; then
+    warn "deployment $DEPLOYMENT already exists - updating it instead"
+    if gcloud deployment-manager deployments update "$DEPLOYMENT" \
+         --config="$WORKDIR/lamp.yaml" --project="$PROJECT_ID" \
+         --labels="marketplace-suppress-benign-warnings=true" >> "$DM_OUT" 2>&1; then
+      ok "deployment updated"
+    elif gcloud deployment-manager deployments update "$DEPLOYMENT" \
+         --project="$PROJECT_ID" >> "$DM_OUT" 2>&1; then
+      ok "deployment instantiated from the preview"
     else
-      note_fail "the deployment failed"
+      note_fail "could not update the deployment"
       tail -25 "$DM_OUT" | sed 's/^/    /'
-      dim "  the full log is in $DM_OUT"
-      exit 1
     fi
+  else
+    note_fail "the deployment failed"
+    grep -oE '"message":"[^"]{0,200}' "$DM_OUT" | head -4 | sed 's/^/    /'
+    dim "  the full log is in $DM_OUT"
+    exit 1
   fi
 
   info "waiting for the instance to be created"
