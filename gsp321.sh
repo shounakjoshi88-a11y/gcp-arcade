@@ -126,13 +126,64 @@ REGION="${REGION_OVERRIDE:-${REGION:-${ZONE%-*}}}"
 
 # Cloud Skills Boost points gcloud's own config at the lab's region/zone, and
 # that is more reliable than any environment variable. Prefer it.
+# Zone detection. `gcloud config compute/zone` is a per-user setting that
+# survives Cloud Shell restarts, so the zone from a PREVIOUS lab is often
+# still sitting there. Sources are tried most-reliable first.
 GCP_ZONE="$(gcloud config get-value compute/zone 2>/dev/null)"
 GCP_REGION="$(gcloud config get-value compute/region 2>/dev/null)"
 [ "$GCP_ZONE" = "(unset)" ] && GCP_ZONE=""
 [ "$GCP_REGION" = "(unset)" ] && GCP_REGION=""
 
-if [ -z "$ZONE_OVERRIDE" ]; then
-  ZONE="${GCP_ZONE:-${CLOUDSDK_COMPUTE_ZONE:-${ZONE:-us-central1-a}}}"
+zone_exists() {
+  gcloud compute zones describe "$1" --project "$PROJECT_ID" >/dev/null 2>&1
+}
+
+detect_zone() {
+  local z
+
+  # 1. an instance that already exists in this project
+  z="$(gcloud compute instances list --project "$PROJECT_ID" \
+        --format="value(zone)" 2>/dev/null | head -1 | sed 's|.*/||')"
+  if [ -n "$z" ] && [ "$z" != "(unset)" ]; then
+    ZONE="$z"
+    ZONE_SOURCE="an existing instance in this project"
+    return 0
+  fi
+
+  # 2. the project's startup script metadata
+  z="$(gcloud compute project-info describe --project "$PROJECT_ID" \
+        --format="value(commonInstanceMetadata.items)" 2>/dev/null \
+        | grep -oE '\b[a-z]+-[a-z]+[0-9]-[a-z]\b' | head -1)"
+  if [ -n "$z" ] && zone_exists "$z"; then
+    ZONE="$z"
+    ZONE_SOURCE="the project startup script metadata"
+    return 0
+  fi
+
+  # 3. the environment
+  if [ -n "${CLOUDSDK_COMPUTE_ZONE:-}" ] && zone_exists "$CLOUDSDK_COMPUTE_ZONE"; then
+    ZONE="$CLOUDSDK_COMPUTE_ZONE"
+    ZONE_SOURCE="CLOUDSDK_COMPUTE_ZONE"
+    return 0
+  fi
+
+  # 4. gcloud config - may well be left over from a previous lab
+  if [ -n "$GCP_ZONE" ] && zone_exists "$GCP_ZONE"; then
+    ZONE="$GCP_ZONE"
+    ZONE_SOURCE="gcloud config compute/zone (may be left over from a previous lab)"
+    return 0
+  fi
+
+  ZONE="us-central1-a"
+  ZONE_SOURCE="the built-in default"
+  return 0
+}
+
+ZONE_SOURCE="the --zone flag"
+if [ -n "$ZONE_OVERRIDE" ]; then
+  ZONE="$ZONE_OVERRIDE"
+else
+  detect_zone
 fi
 
 if [ -n "$ZONE_OVERRIDE" ] && [ -z "$REGION_OVERRIDE" ]; then
@@ -157,8 +208,15 @@ DEPLOYMENT_MANAGER_NAME="prod-network"
 # preflight
 # ---------------------------------------------------------------------------
 printf "%s%s  GSP321 - Develop Your Google Cloud Network%s\n" "$C_CYAN" "$C_BOLD" "$C_RESET"
-printf "  %sproject=%s  %szone=%s  %sregion=%s  %sworkdir=%s%s\n" \
-  "$C_DIM" "$PROJECT_ID" "$C_DIM" "$ZONE" "$C_DIM" "$REGION" "$C_DIM" "$WORKDIR" "$C_RESET"
+printf "  %sproject=%s  %sregion=%s  %sworkdir=%s%s\n" \
+  "$C_DIM" "$PROJECT_ID" "$C_DIM" "$REGION" "$C_DIM" "$WORKDIR" "$C_RESET"
+printf "  %sZONE  = %s%s%s   %s(from %s)%s\n" \
+  "$C_BOLD" "$C_YELLOW" "$ZONE" "$C_RESET" "$C_DIM" "$ZONE_SOURCE" "$C_RESET"
+echo ""
+printf "  %s>> Confirm the zone matches the lab page before continuing.%s\n" "$C_YELLOW" "$C_RESET"
+printf "  %s   The lab scores the subnets, SQL instance and cluster against its%s\n" "$C_DIM"
+printf "  %s   own region. If it differs, stop and re-run with:%s\n" "$C_DIM" "$C_RESET"
+printf "  %s   ./gsp321.sh --zone <lab-zone> --region <lab-region>%s\n" "$C_DIM" "$C_RESET"
 
 step "Preflight checks"
 

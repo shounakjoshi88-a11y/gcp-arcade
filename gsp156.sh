@@ -75,6 +75,11 @@ INSTALL_METHOD="binary"
 DO_DESTROY=0
 SKIP_INSTALL=0
 
+# The zone Cloud Skills Boost assigns to GSP156, used as a fallback only.
+# `gcloud config compute/zone` survives Cloud Shell restarts and is very often
+# still pointing at a PREVIOUS lab's zone, so it cannot be trusted.
+LAB_ZONE="europe-west1-d"
+
 usage() {
   cat <<'USAGE_END'
 GSP156 - Terraform Fundamentals
@@ -127,13 +132,78 @@ if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "(unset)" ]; then
   PROJECT_ID="${DEVSHELL_PROJECT_ID:-}"
 fi
 
-# Cloud Skills Boost points gcloud's own config at the lab's region/zone.
+# Zone detection. The lab's zone is the single most important value here and
+# the most commonly wrong one: `gcloud config compute/zone` is a per-user
+# setting that survives Cloud Shell restarts, so the zone from a PREVIOUS lab
+# is often still sitting there. Sources are tried most-reliable first.
 GCP_ZONE="$(gcloud config get-value compute/zone 2>/dev/null)"
 GCP_REGION="$(gcloud config get-value compute/region 2>/dev/null)"
 [ "$GCP_ZONE" = "(unset)" ] && GCP_ZONE=""
 [ "$GCP_REGION" = "(unset)" ] && GCP_REGION=""
 
-ZONE="${ZONE_OVERRIDE:-${GCP_ZONE:-${CLOUDSDK_COMPUTE_ZONE:-us-central1-a}}}"
+zone_exists() {
+  gcloud compute zones describe "$1" --project "$PROJECT_ID" >/dev/null 2>&1
+}
+
+# Sets ZONE and ZONE_SOURCE directly. Deliberately NOT called in a
+# subshell - a command substitution would discard the ZONE_SOURCE assignment.
+detect_zone() {
+  local z
+
+  # 1. the zone Cloud Skills Boost assigns to this lab. Checked first because
+  #    `gcloud config compute/zone` survives Cloud Shell restarts and is very
+  #    often still pointing at a PREVIOUS lab's zone.
+  if [ -n "$LAB_ZONE" ] && zone_exists "$LAB_ZONE"; then
+    ZONE="$LAB_ZONE"
+    ZONE_SOURCE="the lab's default zone (override with --zone)"
+    return 0
+  fi
+
+  # 2. an instance that already exists in this project
+  z="$(gcloud compute instances list --project "$PROJECT_ID" \
+        --format="value(zone)" 2>/dev/null | head -1 | sed 's|.*/||')"
+  if [ -n "$z" ] && [ "$z" != "(unset)" ]; then
+    ZONE="$z"
+    ZONE_SOURCE="an existing instance in this project"
+    return 0
+  fi
+
+  # 3. the project's startup script metadata
+  z="$(gcloud compute project-info describe --project "$PROJECT_ID" \
+        --format="value(commonInstanceMetadata.items)" 2>/dev/null \
+        | grep -oE '\b[a-z]+-[a-z]+[0-9]-[a-z]\b' | head -1)"
+  if [ -n "$z" ] && zone_exists "$z"; then
+    ZONE="$z"
+    ZONE_SOURCE="the project startup script metadata"
+    return 0
+  fi
+
+  # 4. the environment
+  if [ -n "${CLOUDSDK_COMPUTE_ZONE:-}" ] && zone_exists "$CLOUDSDK_COMPUTE_ZONE"; then
+    ZONE="$CLOUDSDK_COMPUTE_ZONE"
+    ZONE_SOURCE="CLOUDSDK_COMPUTE_ZONE"
+    return 0
+  fi
+
+  # 5. gcloud config - may well be left over from a previous lab
+  if [ -n "$GCP_ZONE" ] && zone_exists "$GCP_ZONE"; then
+    ZONE="$GCP_ZONE"
+    ZONE_SOURCE="gcloud config compute/zone (may be left over from a previous lab)"
+    return 0
+  fi
+
+  ZONE="us-central1-a"
+  ZONE_SOURCE="the built-in default"
+  return 0
+}
+
+ZONE_SOURCE="the --zone flag"
+if [ -n "$ZONE_OVERRIDE" ]; then
+  ZONE="$ZONE_OVERRIDE"
+else
+  detect_zone
+fi
+
 if [ -n "$ZONE_OVERRIDE" ] && [ -z "$REGION_OVERRIDE" ]; then
   REGION="${ZONE_OVERRIDE%-*}"
 else
@@ -144,9 +214,15 @@ fi
 # preflight
 # ---------------------------------------------------------------------------
 printf "%s%s  GSP156 - Terraform Fundamentals%s\n" "$C_CYAN" "$C_BOLD" "$C_RESET"
-printf "  %sproject=%s  %szone=%s  %sregion=%s  %simage=%s  %stype=%s  %sworkdir=%s%s\n" \
-  "$C_DIM" "$PROJECT_ID" "$C_DIM" "$ZONE" "$C_DIM" "$REGION" "$C_DIM" "${IMAGE_OVERRIDE:-auto}" \
-  "$C_DIM" "$MACHINE_TYPE" "$C_DIM" "$WORKDIR" "$C_RESET"
+printf "  %sproject=%s  %sregion=%s  %stype=%s  %sworkdir=%s%s\n" \
+  "$C_DIM" "$PROJECT_ID" "$C_DIM" "$REGION" "$C_DIM" "$MACHINE_TYPE" "$C_DIM" "$WORKDIR" "$C_RESET"
+printf "  %sZONE  = %s%s%s   %s(from %s)%s\n" \
+  "$C_BOLD" "$C_YELLOW" "$ZONE" "$C_RESET" "$C_DIM" "$ZONE_SOURCE" "$C_RESET"
+printf "  %simage = %s%s%s\n" "$C_DIM" "${IMAGE_OVERRIDE:-auto}" "$C_RESET"
+echo ""
+printf "  %s>> Confirm the zone matches the lab page before continuing.%s\n" "$C_YELLOW" "$C_RESET"
+printf "  %s   The lab scores the VM against its own zone. If it differs, stop and%s\n" "$C_DIM"
+printf "  %s   re-run with:  ./gsp156.sh --zone <lab-zone>%s\n" "$C_DIM" "$C_RESET"
 
 step "Preflight checks"
 
@@ -339,36 +415,22 @@ resolve_image() {
     return 0
   fi
 
-  # 1. The lab template usually leaves the Debian image id in the project's
-  #    common instance metadata (startup script).
-  local meta
+  # The lab's own boot disk image family. Cloud Skills Boost usually leaves it
+  # in the project's common instance metadata (startup script).
+  local meta found
   meta="$(gcloud compute project-info describe --project "$PROJECT_ID" \
     --format="value(commonInstanceMetadata.items)" 2>/dev/null)"
   if [ -n "$meta" ]; then
-    local found
     found="$(printf '%s' "$meta" \
-      | grep -oE 'debian-[0-9]+-[a-z]+-v[0-9]{6,}' | head -1)"
-    [ -z "$found" ] && found="$(printf '%s' "$meta" | grep -oE 'debian-[0-9]+' | head -1)"
+      | grep -oE 'debian-[0-9]+(-[a-z]+)?(-v[0-9]+)?' | head -1)"
     if [ -n "$found" ]; then
       echo "$found"
       return 0
     fi
   fi
 
-  # 2. Otherwise use the newest Debian image published by debian-cloud.
-  local img
-  for fam in debian-12 debian-11; do
-    img="$(gcloud compute images list --project debian-cloud \
-      --filter="family=$fam" --sort-by="~creationTimestamp" --limit=1 \
-      --format="value(name)" 2>/dev/null | head -1)"
-    if [ -n "$img" ]; then
-      echo "$img"
-      return 0
-    fi
-  done
-
-  # 3. Last resort.
-  echo "debian-12-bookworm-v20250113"
+  # This is the exact image family the lab's own instance.tf uses.
+  echo "debian-12"
 }
 
 IMAGE="$(resolve_image)"
@@ -486,6 +548,18 @@ else
     ok "instance '$INSTANCE_NAME' exists in $ZONE"
   else
     note_fail "instance '$INSTANCE_NAME' not found in $ZONE"
+  fi
+
+  # The lab scores the VM against its own zone. If the instance ended up
+  # somewhere else, say so loudly and show exactly how to move it.
+  STRAY="$(gcloud compute instances list --project "$PROJECT_ID" \
+    --filter="name=$INSTANCE_NAME" --format="value(zone)" 2>/dev/null \
+    | sed 's|.*/||' | grep -v "^$ZONE$" | head -1)"
+  if [ -n "$STRAY" ]; then
+    err "instance '$INSTANCE_NAME' is in $STRAY but this script targeted $ZONE"
+    dim "  If the lab wants a different zone, re-run with it - Terraform will"
+    dim "  replace the instance (zone is a ForceNew field):"
+    dim "    ./gsp156.sh --zone <lab-zone>"
   fi
 
   EXT_IP="$(gcloud compute instances describe "$INSTANCE_NAME" --zone "$ZONE" \

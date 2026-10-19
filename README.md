@@ -42,15 +42,29 @@ Both scripts work out of the box because they read the lab's own settings:
 
 - **project** — `gcloud config get-value project`, falling back to
   `$DEVSHELL_PROJECT_ID`
-- **region / zone** — `gcloud config get-value compute/zone` and
-  `compute/region`. Cloud Skills Boost points these at the lab's own values,
-  which is more reliable than any environment variable. Both are printed in
-  the banner so you can spot a mismatch instantly.
+- **region / zone** — this is the value most likely to be wrong, because
+  `gcloud config compute/zone` is a **per-user setting that survives Cloud
+  Shell restarts**. The zone from a previous lab is often still sitting
+  there, and the lab will then score your resources against a zone you never
+  asked for. Both scripts therefore try, in order:
+
+  1. the `--zone` flag
+  2. the zone Cloud Skills Boost assigns to that lab
+  3. the zone of an instance already in the project
+  4. the project's startup-script metadata
+  5. `$CLOUDSDK_COMPUTE_ZONE`
+  6. `gcloud config compute/zone` — flagged as *possibly stale*
+
+  Whichever source won is printed in the banner, along with a reminder to
+  compare it with the lab page. For GSP156 the lab's zone (`europe-west1-d`)
+  is baked in as a fallback; override it with `--zone` if your lab run
+  differs.
 - **roles** — the preflight lists the roles the active account actually holds,
   so a `roles/owner` account no longer gets a bogus "you need editor" warning
 
-> If the zone or region in the banner does not match what the lab page says,
-> pass them explicitly: `./gsp321.sh --zone us-central1-a --region us-central1`
+> If the zone in the banner does not match what the lab page says, stop and
+> re-run with it: `./gsp156.sh --zone <lab-zone>` /
+> `./gsp321.sh --zone <lab-zone> --region <lab-region>`.
 
 ---
 
@@ -190,8 +204,8 @@ runtime:
 | Placeholder | How it's found |
 |---|---|
 | `Project ID` | `gcloud config get-value project` |
-| `zone` | `gcloud config get-value compute/zone` |
-| `Debian image ID` | the project's common instance metadata (startup script), falling back to the newest Debian image in `debian-cloud` |
+| `zone` | the lab's zone (`europe-west1-d`), or `--zone` |
+| `Debian image ID` | the project's common instance metadata (startup script), falling back to the `debian-12` image family the lab itself uses |
 
 ### Terraform installation
 
