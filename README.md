@@ -7,6 +7,7 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp321.sh`](./gsp321.sh) | **GSP321** — Develop Your Google Cloud Network | Dev + prod VPCs, bastion, Cloud SQL, GKE, WordPress, uptime check, IAM |
 | [`gsp156.sh`](./gsp156.sh) | **GSP156** — Terraform Fundamentals | Installs Terraform, writes `instance.tf`, provisions a VM with Terraform |
 | [`gsp345.sh`](./gsp345.sh) | **GSP345** — Build Infrastructure with Terraform (Challenge Lab) | 7 tasks: modules, imports, remote GCS backend, registry module, firewall |
+| [`gsp_marketplace.sh`](./gsp_marketplace.sh) | **Cloud Marketplace** — Getting Started with Cloud Marketplace | Deploys the LAMP stack (Apache + MySQL + PHP + phpMyAdmin) and verifies the site |
 
 Both scripts are **idempotent** — re-run them after any failure and they
 skip whatever already exists. Both exit `0` when every step succeeded and `1`
@@ -409,16 +410,74 @@ lab, then imported as normal.
 
 ---
 
+## Cloud Marketplace - Getting Started with Cloud Marketplace
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_marketplace.sh
+chmod +x gsp_marketplace.sh
+./gsp_marketplace.sh
+```
+
+Deploys the LAMP stack - Linux, Apache HTTP Server, MySQL, PHP and phpMyAdmin
+- and then verifies the site.
+
+### What the console does, and what this does
+
+The lab's own path is: **Marketplace -> search "LAMP" -> "LAMP Stack, by Google
+Click to Deploy" -> GET STARTED -> agree -> DEPLOY -> pick the zone, E2 /
+e2-medium**. That solution is a Deployment Manager deployment named `lamp-1`
+that creates an instance `lamp-1-vm` and an HTTP firewall rule.
+
+The marketplace *image* is licensed, so it can only be launched from the
+console after the terms are accepted. This script therefore creates the
+**same deployment** with the same names, zone, machine type and firewall
+rule, and installs the LAMP stack with a startup script instead. The
+component list matches the real solution's Chef cookbook
+(`apache2` + `mysql::version-8.0-embedded` + `php83` + `phpmyadmin`), and it
+writes the same `lamp-server.conf` virtual host the Click to Deploy cookbook
+uses.
+
+If the checkpoint insists on the marketplace image itself, deploy it in the
+console (six clicks, about a minute) and then run:
+
+```bash
+./gsp_marketplace.sh --verify
+```
+
+which finds the existing instance, copies `phpinfo.php` into the document root
+and prints the site address.
+
+### Options
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--project ID` | active gcloud project | Target project |
+| `--zone ZONE` | `gcloud config compute/zone` | Deployment zone |
+| `--region REGION` | derived from the zone | Region |
+| `--deployment NAME` | `lamp-1` | Deployment Manager deployment name |
+| `--machine-type T` | `e2-medium` | Machine type |
+| `--image IMAGE` | `debian-12` | Boot disk image family |
+| `--workdir PATH` | `$HOME/gsp-marketplace` | Where the configuration is staged |
+| `--verify` | off | Only verify a deployment that already exists |
+| `--destroy` | off | Delete the deployment |
+| `-h, --help` | | Usage |
+
+The LAMP software installs during boot, so the site takes a few minutes to
+start answering. The script polls it and tells you the URL either way.
+
+---
+
 ## Layout
 
 ```
-gsp321.sh     # GSP321 - Develop Your Google Cloud Network
-gsp156.sh     # GSP156 - Terraform Fundamentals
-gsp345.sh     # GSP345 - Build Infrastructure with Terraform: Challenge Lab
-TASKS.md      # GSP321, task by task, for manual runs
-TASKS156.md   # GSP156, task by task, for manual runs
-TASKS345.md   # GSP345, task by task, for manual runs
-README.md     # this file
+gsp321.sh            # GSP321 - Develop Your Google Cloud Network
+gsp156.sh            # GSP156 - Terraform Fundamentals
+gsp345.sh            # GSP345 - Build Infrastructure with Terraform: Challenge Lab
+gsp_marketplace.sh   # Getting Started with Cloud Marketplace - LAMP stack
+TASKS.md             # GSP321, task by task, for manual runs
+TASKS156.md          # GSP156, task by task, for manual runs
+TASKS345.md          # GSP345, task by task, for manual runs
+README.md            # this file
 ```
 
 ## Credits
