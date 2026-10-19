@@ -208,19 +208,54 @@ wait_for_network() {  # $1 = network name
   return 1
 }
 
-wait_for_subnet() {  # $1 = network, $2 = region
-  local i
-  for i in $(seq 1 "${GSP_SUBNET_WAIT:-40}"); do
-    # an auto mode network names its subnet "default" in every region
-    if gcloud compute networks subnets list --network="$1" \
-         --filter="region=$2" --project "$PROJECT_ID" \
-         --format="value(name)" 2>/dev/null | grep -qx "default"; then
-      ok "the $2/default subnet exists"
+# An auto mode network is supposed to name its subnet "default" in every
+# region, but the API does not always create them. Rather than depend on it,
+# make sure the subnet exists.
+pick_range() {  # a free /20 out of the 10.128.0.0/9 space
+  local cand used
+  used="$(gcloud compute networks subnets list --project "$PROJECT_ID" \
+          --format="value(ipCidrRange)" 2>/dev/null)"
+  for cand in 10.128.0.0/20 10.132.0.0/20 10.136.0.0/20 10.140.0.0/20 \
+              10.144.0.0/20 10.148.0.0/20 10.152.0.0/20 10.156.0.0/20 \
+              10.160.0.0/20 10.164.0.0/20 10.168.0.0/20 10.172.0.0/20 \
+              10.176.0.0/20 10.180.0.0/20 10.184.0.0/20 10.188.0.0/20 \
+              10.192.0.0/20 10.196.0.0/20 10.200.0.0/20 10.204.0.0/20 \
+              10.208.0.0/20 10.212.0.0/20 10.216.0.0/20 10.220.0.0/20 \
+              10.224.0.0/20 10.228.0.0/20 10.232.0.0/20; do
+    if ! printf '%s\n' "$used" | grep -qx "$cand"; then
+      echo "$cand"
+      return 0
+    fi
+  done
+  echo "10.128.0.0/20"
+}
+
+ensure_subnet() {  # $1 = network, $2 = region
+  local i rng
+  if gcloud compute networks subnets describe default --network="$1" \
+       --region="$2" --project "$PROJECT_ID" >/dev/null 2>&1; then
+    ok "the $2/default subnet exists"
+    return 0
+  fi
+
+  # give auto mode a short chance to catch up
+  for i in $(seq 1 "${GSP_SUBNET_WAIT:-12}"); do
+    if gcloud compute networks subnets describe default --network="$1" \
+         --region="$2" --project "$PROJECT_ID" >/dev/null 2>&1; then
+      ok "the $2/default subnet appeared"
       return 0
     fi
     sleep 5
   done
-  warn "the $2/default subnet did not appear in time - subnets in that network:"
+
+  warn "auto mode did not create the $2/default subnet - creating it"
+  rng="$(pick_range)"
+  if gcloud compute networks subnets create default --network="$1" \
+       --region="$2" --range="$rng" --project "$PROJECT_ID" --quiet >/dev/null 2>&1; then
+    ok "created the $2/default subnet ($rng)"
+    return 0
+  fi
+  note_fail "could not create the $2/default subnet"
   gcloud compute networks subnets list --network="$1" --project "$PROJECT_ID" \
     --format="table(name,region,ipCidrRange)" 2>/dev/null | sed 's/^/    /'
   return 1
@@ -348,9 +383,9 @@ task2() {
   gcloud compute firewall-rules list --filter="network=$NETWORK" --project "$PROJECT_ID" \
     --format="value(name)" 2>/dev/null | sed 's/^/    /'
 
-  info "waiting for the subnets in $REGION1 and $REGION2"
-  wait_for_subnet "$NETWORK" "$REGION1"
-  wait_for_subnet "$NETWORK" "$REGION2"
+  info "making sure the subnets exist in $REGION1 and $REGION2"
+  ensure_subnet "$NETWORK" "$REGION1"
+  ensure_subnet "$NETWORK" "$REGION2"
 
   create_vm() {  # $1 = name, $2 = zone
     if instance_exists "$1" "$2"; then
