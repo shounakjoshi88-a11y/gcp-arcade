@@ -63,6 +63,13 @@ WORKDIR="${GSP_MKT_WORKDIR:-$HOME/gsp-marketplace}"
 VERIFY_ONLY=0
 DO_DESTROY=0
 
+# The lab setup panel states the region and zone. They are injected per lab
+# run, so they cannot be detected from the project - the closest thing to a
+# pre-created instance does not exist for this lab. Keep them here, and
+# override with --zone / --region.
+LAB_REGION="asia-east1"
+LAB_ZONE="asia-east1-b"
+
 usage() {
   cat <<'USAGE_END'
 GSP - Getting Started with Cloud Marketplace (LAMP stack)
@@ -123,11 +130,24 @@ GCP_REGION="$(gcloud config get-value compute/region 2>/dev/null)"
 [ "$GCP_ZONE" = "(unset)" ] && GCP_ZONE=""
 [ "$GCP_REGION" = "(unset)" ] && GCP_REGION=""
 
-ZONE="${ZONE_OVERRIDE:-${GCP_ZONE:-${CLOUDSDK_COMPUTE_ZONE:-us-central1-b}}}"
+if [ -n "$ZONE_OVERRIDE" ]; then
+  ZONE="$ZONE_OVERRIDE"
+  ZONE_SOURCE="the --zone flag"
+elif [ -n "$LAB_ZONE" ]; then
+  ZONE="$LAB_ZONE"
+  ZONE_SOURCE="this lab's default zone"
+else
+  ZONE="${GCP_ZONE:-${CLOUDSDK_COMPUTE_ZONE:-us-central1-b}}"
+  ZONE_SOURCE="gcloud config compute/zone"
+fi
 if [ -n "$ZONE_OVERRIDE" ] && [ -z "$REGION_OVERRIDE" ]; then
   REGION="${ZONE_OVERRIDE%-*}"
+elif [ -n "$REGION_OVERRIDE" ]; then
+  REGION="$REGION_OVERRIDE"
+elif [ -n "$LAB_REGION" ]; then
+  REGION="$LAB_REGION"
 else
-  REGION="${REGION_OVERRIDE:-${GCP_REGION:-${CLOUDSDK_COMPUTE_REGION:-${ZONE%-*}}}}"
+  REGION="${GCP_REGION:-${CLOUDSDK_COMPUTE_REGION:-${ZONE%-*}}}"
 fi
 
 printf "%s%s  Getting Started with Cloud Marketplace - LAMP stack%s\n" "$C_CYAN" "$C_BOLD" "$C_RESET"
@@ -145,7 +165,9 @@ ok "gcloud is available"
 
 gcloud config set project "$PROJECT_ID" >/dev/null 2>&1
 ok "project: $PROJECT_ID"
-ok "zone: $ZONE   region: $REGION"
+ok "zone: $ZONE   region: $REGION   (from $ZONE_SOURCE)"
+printf "  %sYour lab setup panel should say:%s  Region %s   Zone %s\n" "$C_DIM" "$C_RESET" "$REGION" "$ZONE"
+printf "  %sIf they differ, re-run with:  ./gsp_marketplace.sh --zone <zone> --region <region>%s\n" "$C_DIM" "$C_RESET"
 
 if [ "${CLOUD_SHELL:-}" = "true" ]; then
   info "running inside Google Cloud Shell"
