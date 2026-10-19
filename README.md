@@ -6,6 +6,7 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 |---|---|---|
 | [`gsp321.sh`](./gsp321.sh) | **GSP321** — Develop Your Google Cloud Network | Dev + prod VPCs, bastion, Cloud SQL, GKE, WordPress, uptime check, IAM |
 | [`gsp156.sh`](./gsp156.sh) | **GSP156** — Terraform Fundamentals | Installs Terraform, writes `instance.tf`, provisions a VM with Terraform |
+| [`gsp345.sh`](./gsp345.sh) | **GSP345** — Build Infrastructure with Terraform (Challenge Lab) | 7 tasks: modules, imports, remote GCS backend, registry module, firewall |
 
 Both scripts are **idempotent** — re-run them after any failure and they
 skip whatever already exists. Both exit `0` when every step succeeded and `1`
@@ -308,13 +309,85 @@ terraform import google_compute_instance.default terraform
 
 ---
 
+## GSP345 — Build Infrastructure with Terraform: Challenge Lab
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp345.sh
+chmod +x gsp345.sh
+./gsp345.sh
+```
+
+Seven tasks: create the configuration tree, import two pre-existing
+instances, move the state into a GCS backend, modify and update the
+instances, destroy one of them, pull the VPC module from the Terraform
+Registry, and add a firewall rule.
+
+### It pauses between tasks on purpose
+
+The lab's checkpoints **contradict each other** — task 4 creates a third
+instance and task 5 destroys it again. The lab therefore only scores a task
+when you click *Check my progress* for it, so the script stops after every
+task and waits for you to click that button:
+
+```
+  >>> Task 2 applied: Import infrastructure
+      Click 'Check my progress' for 'Import infrastructure' in the lab console,
+      then press Enter here to continue (Ctrl-C stops - just re-run
+      ./gsp345.sh later and it picks up where you left off).
+```
+
+Progress is saved in `$HOME/gsp345/.gsp345-progress`, so re-running resumes
+at the first unfinished task. Use `--task N` to run a single task, or
+`--yes` to run everything without pausing.
+
+### Everything is read from the lab, not guessed
+
+| Value | Where it comes from |
+|---|---|
+| project | `gcloud config get-value project` |
+| zone / region | the zone of the pre-created `tf-instance-1` |
+| machine type | `gcloud compute instances describe tf-instance-1` |
+| boot disk image | the instance's own disk source |
+| instance IDs (for `terraform import`) | the instance's numeric id |
+
+The last three matter more than they look: `boot_disk.initialize_params.image`
+is a **ForceNew** field, so if the configured image does not match the
+existing disk, Terraform destroys and recreates the instance instead of
+updating it in place — and the import checkpoint never scores.
+
+### It validates the configuration it generates
+
+After writing each task's `.tf` files, the script runs `terraform fmt
+-recursive`, which *parses* every file. A syntax error stops the run there
+instead of half-way through a task with a broken `apply`.
+
+### Options
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--project ID` | active gcloud project | Target project |
+| `--zone ZONE` | the pre-created instances' zone | Lab zone |
+| `--region REGION` | derived from the zone | Lab region |
+| `--workdir PATH` | `$HOME/gsp345` | Where the configuration lives |
+| `--bucket NAME` | the project ID | Remote-backend bucket |
+| `--vpc NAME` | `terraform-vpc` | VPC name |
+| `--instance NAME` | `tf-instance-3` | Third instance name |
+| `--task N` | all | Run only task N (1–7) |
+| `--yes` | off | Do not pause between tasks |
+| `--skip-install` | off | Assume terraform is already on PATH |
+| `-h, --help` | | Usage |
+
+---
+
 ## Layout
 
 ```
 gsp321.sh     # GSP321 - Develop Your Google Cloud Network
 gsp156.sh     # GSP156 - Terraform Fundamentals
+gsp345.sh     # GSP345 - Build Infrastructure with Terraform: Challenge Lab
 TASKS.md      # GSP321, task by task, for manual runs
 TASKS156.md   # GSP156, task by task, for manual runs
+TASKS345.md   # GSP345, task by task, for manual runs
 README.md     # this file
 ```
 
