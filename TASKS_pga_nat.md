@@ -78,6 +78,28 @@ exit
 
 ## Task 2 — Enable Private Google Access
 
+### The multiple-choice questions in task 2
+
+**"Currently, which of your VM instances can access the image from your
+bucket?"** — tick **Cloud Shell** only.
+
+This question sits *before* Private Google Access is enabled, so it asks
+about the state right now:
+
+| Option | Answer |
+|---|---|
+| Cloud Shell | **Yes** — it is a Compute Engine VM with an external IP address, so the copy works |
+| `vm-internal` | **No** — it has no external IP and Private Google Access is disabled by default, so it can only reach inside the VPC |
+
+Once you switch Private Google Access on at the subnet level, `vm-internal`
+can read the object too.
+
+**"Did the command prompt change to @vm-internal?"** — **True**.
+
+After `gcloud compute ssh vm-internal --tunnel-through-iap` you are inside the
+VM and the prompt reads `student-xx@vm-internal:~$` — the instance name sits
+after the `@`.
+
 ### The bucket and the test object
 
 ```bash
