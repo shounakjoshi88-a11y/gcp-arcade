@@ -49,6 +49,21 @@ Explore the four buttons on the right of the Cloud Shell toolbar — minimize,
 restore/maximize, open in a new window, and close terminal — then close Cloud
 Shell.
 
+### The multiple-choice question in task 2
+
+*Select the features and capabilities provided by Cloud Shell. (Select all that
+apply.)*
+
+| Option | Answer |
+|---|---|
+| A command-line tool that requires you to install Cloud SDK | **No** — the Cloud SDK is pre-installed; the lab says you can work "without having to install the Cloud SDK and other tools on your computer" |
+| Command-line access to a free temporary Compute Engine VM | **Yes** |
+| 5 GB of persistent disk storage (`$HOME` dir) | **Yes** |
+| Built-in authorization for access to resources and instances | **Yes** |
+
+Tick the **last three**. The first option describes the `gcloud` CLI when you
+install it on your own machine, not Cloud Shell.
+
 ## Task 3 — Create a bucket using Cloud Shell
 
 ```bash
