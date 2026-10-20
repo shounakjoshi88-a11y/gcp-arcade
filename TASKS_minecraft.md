@@ -61,6 +61,27 @@ The data disk is named `minecraft-disk` on purpose — the mount point in the
 next task is `/dev/disk/by-id/google-minecraft-disk`, and that path comes from
 the **disk name**.
 
+> ### Do not switch on OS Login
+>
+> Some scripts create the VM with `--metadata=enable-oslogin=true`. Do not do
+> that here. With OS Login enabled, `gcloud compute ssh` and
+> `gcloud compute scp` use the OS Login flow, which needs the
+> **`roles/iam.osLogin`** permission — and a lab student account usually does
+> not have it. Both commands then fail with a permissions error, even though
+> the console's **SSH** button works fine (it uses the classic
+> metadata-based key instead).
+>
+> The classic flow works with any account that has Editor, so the VM is
+> created without that metadata item.
+>
+> If you already created the VM with OS Login on, turn it off and restart it:
+>
+> ```bash
+> gcloud compute instances remove-metadata mc-server --keys=enable-oslogin --zone=ZONE
+> gcloud compute instances stop mc-server --zone=ZONE
+> gcloud compute instances start mc-server --zone=ZONE
+> ```
+
 ## Task 2 — Prepare the data disk
 
 ```bash

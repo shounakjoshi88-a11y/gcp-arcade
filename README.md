@@ -895,7 +895,30 @@ gcloud compute ssh mc-server --command="bash /tmp/prepare_disk.sh"
 ```
 
 The scripts are written to `~/gsp-minecraft/` so you can read exactly what
-ran on the VM.
+ran on the VM. If the copy fails for any reason, the script sends the script
+over the SSH command line instead:
+
+```bash
+gcloud compute ssh mc-server --command="echo '<base64>' | base64 -d | bash"
+```
+
+### Do not switch on OS Login
+
+Some reference scripts create the VM with `--metadata=enable-oslogin=true`.
+With OS Login enabled, `gcloud compute ssh` and `gcloud compute scp` use the
+OS Login flow, which needs the **`roles/iam.osLogin`** permission — and a lab
+student account usually does not have it. Both commands then fail with a
+permissions error, even though the console's **SSH** button works (it uses the
+classic metadata-based key).
+
+The script creates the VM **without** that metadata item, and if it finds an
+instance that has it, it turns it off and restarts the VM:
+
+```
+  [WARN] the VM has OS Login switched on, which blocks gcloud SSH for this account
+  [INFO] turning it off and restarting the VM
+  [OK]   SSH into mc-server works now
+```
 
 ### About the last task
 

@@ -34,7 +34,13 @@
 #   * The zone is injected by the lab per run, so the script asks for it.
 #   * The steps that run INSIDE the VM are uploaded with gcloud compute scp
 #     and run over one SSH session, so the environment variables survive
-#     from one step to the next.
+#     from one step to the next. If the copy fails, the script sends the
+#     script over the SSH command line instead.
+#   * The VM is created WITHOUT enable-oslogin. With OS Login switched on,
+#     gcloud compute ssh needs the roles/iam.osLogin permission, which a lab
+#     student does not have - and then both gcloud compute ssh and
+#     gcloud compute scp fail. The script also turns OS Login off and
+#     restarts the VM if it finds an instance that has it.
 # =============================================================================
 
 set -uo pipefail
@@ -211,16 +217,70 @@ pause_for_check() {  # $1 = task number, $2 = checkpoint name
   read -r _
 }
 
-# Upload a script to the VM and run it there over one SSH session.
-run_on_vm() {  # $1 = local file, $2 = remote path
-  local remote="$2"
-  if ! gcloud compute scp "$1" "$VM:$remote" --zone "$ZONE" --project "$PROJECT_ID" \
-         --quiet >/dev/null 2>&1; then
-    err "could not copy $1 to the VM"
-    return 1
+# Make sure SSH into the VM works. With OS Login switched on, gcloud needs
+# the roles/iam.osLogin permission, which a lab student usually does not
+# have - and then both gcloud compute ssh and gcloud compute scp fail. The
+# classic metadata-based SSH key works for any account with Editor.
+ensure_ssh() {
+  local out
+  out="$(gcloud compute ssh "$VM" --zone "$ZONE" --project "$PROJECT_ID" --quiet \
+          --command="echo SSH-OK" 2>&1)"
+  if printf '%s' "$out" | grep -q "SSH-OK"; then
+    ok "SSH into $VM works"
+    return 0
   fi
+
+  if gcloud compute instances describe "$VM" --zone "$ZONE" --project "$PROJECT_ID" \
+       --format="value(metadata.items)" 2>/dev/null | grep -q "enable-oslogin"; then
+    warn "the VM has OS Login switched on, which blocks gcloud SSH for this account"
+    info "turning it off and restarting the VM"
+    gcloud compute instances remove-metadata "$VM" --keys=enable-oslogin \
+      --zone="$ZONE" --project "$PROJECT_ID" --quiet >/dev/null 2>&1
+    gcloud compute instances stop "$VM" --zone="$ZONE" --project "$PROJECT_ID" \
+      --quiet >/dev/null 2>&1
+    gcloud compute instances start "$VM" --zone="$ZONE" --project "$PROJECT_ID" \
+      --quiet >/dev/null 2>&1
+    info "waiting for the VM to come back"
+    local i
+    for i in $(seq 1 40); do
+      if gcloud compute instances describe "$VM" --zone "$ZONE" --project "$PROJECT_ID" \
+           --format="value(status)" 2>/dev/null | grep -q "RUNNING"; then
+        break
+      fi
+      sleep 5
+    done
+    out="$(gcloud compute ssh "$VM" --zone "$ZONE" --project "$PROJECT_ID" --quiet \
+            --command="echo SSH-OK" 2>&1)"
+    if printf '%s' "$out" | grep -q "SSH-OK"; then
+      ok "SSH into $VM works now"
+      return 0
+    fi
+  fi
+
+  err "cannot SSH into $VM"
+  printf '%s\n' "$out" | head -6 | sed 's/^/    /'
+  dim "  the console's SSH button uses a different flow, so if that works the"
+  dim "  problem is your SSH key or your IAM roles, not the lab."
+  return 1
+}
+
+# Run a script on the VM over one SSH session. The script is copied over
+# first, and if that copy fails for any reason it is sent over the SSH
+# command line instead - same result, one less thing that can go wrong.
+run_on_vm() {  # $1 = local file, $2 = remote path
+  local remote="$2" scp_err b64
+  if scp_err="$(gcloud compute scp "$1" "$VM:$remote" --zone "$ZONE" \
+                --project "$PROJECT_ID" --quiet 2>&1)"; then
+    gcloud compute ssh "$VM" --zone "$ZONE" --project "$PROJECT_ID" --quiet \
+      --command="bash $remote" 2>&1
+    return $?
+  fi
+
+  warn "gcloud compute scp did not work - sending the script over SSH instead"
+  printf '%s\n' "$scp_err" | head -4 | sed 's/^/    /'
+  b64="$(base64 -w0 "$1" 2>/dev/null || base64 "$1" | tr -d '\n')"
   gcloud compute ssh "$VM" --zone "$ZONE" --project "$PROJECT_ID" --quiet \
-    --command="bash $remote" 2>&1
+    --command="echo '$b64' | base64 -d | bash" 2>&1
   return $?
 }
 
@@ -286,7 +346,6 @@ task1() {
        --zone="$ZONE" --project "$PROJECT_ID" \
        --machine-type=e2-medium \
        --network-interface="address=$IP_ADDR,network-tier=PREMIUM,subnet=default" \
-       --metadata=enable-oslogin=true \
        --scopes="https://www.googleapis.com/auth/servicecontrol,https://www.googleapis.com/auth/service.management.readonly,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write,https://www.googleapis.com/auth/trace.append,https://www.googleapis.com/auth/devstorage.read_write" \
        --tags="$TAG" \
        --create-disk="auto-delete=yes,boot=yes,device-name=$VM,image=projects/debian-cloud/global/images/family/$IMAGE,mode=rw,size=10,type=pd-balanced" \
@@ -321,6 +380,8 @@ task2() {
     err "$VM does not exist - run task 1 first"
     return 1
   fi
+
+  ensure_ssh || return 1
 
   cat > "$WORKDIR/prepare_disk.sh" <<EOF
 #!/bin/bash
@@ -371,6 +432,8 @@ task3() {
     err "$VM does not exist - run task 1 first"
     return 1
   fi
+
+  ensure_ssh || return 1
 
   cat > "$WORKDIR/install_mc.sh" <<EOF
 #!/bin/bash
@@ -488,6 +551,8 @@ task5() {
       return 1
     fi
   fi
+
+  ensure_ssh || return 1
 
   cat > "$WORKDIR/backups.sh" <<EOF
 #!/bin/bash
