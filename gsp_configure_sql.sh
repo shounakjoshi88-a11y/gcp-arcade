@@ -185,7 +185,7 @@ if [ -z "$PASSWORD_OVERRIDE" ] && [ "$ASSUME_YES" != "1" ]; then
   dim "  you will need it for the WordPress setup form later, so pick one you remember"
   while true; do
     printf "  %sRoot password%s  [Passw0rd1!]: " "$C_BOLD" "$C_RESET"
-    read -r ans
+    read -r ans || true
     PASSWORD_OVERRIDE="${ans:-Passw0rd1!}"
     echo ""
     PROBLEMS="$(password_problems "$PASSWORD_OVERRIDE")"
@@ -196,7 +196,7 @@ if [ -z "$PASSWORD_OVERRIDE" ] && [ "$ASSUME_YES" != "1" ]; then
     if [ -n "$PROBLEMS" ]; then
       warn "the Cloud SQL password policy may want: $PROBLEMS"
       printf "  %sUse it anyway? [y/N]%s " "$C_BOLD" "$C_RESET"
-      read -r go
+      read -r go || true
       echo ""
       case "$go" in
         y|Y|yes|YES) break ;;
@@ -235,7 +235,8 @@ pause_for_check() {  # $1 = task number, $2 = checkpoint name
   printf "  %s    Click 'Check my progress' for '%s' in the lab console,%s\n" "$C_DIM" "$2" "$C_RESET"
   printf "  %s    then press Enter here to continue.%s\n" "$C_DIM" "$C_RESET"
   printf "  %s    >%s" "$C_YELLOW" "$C_RESET"
-  read -r _
+  read -r _ || true
+  return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -289,36 +290,79 @@ task1() {
       && ok "the peering is connected" \
       || warn "the peering may already be connected"
 
+    # the proxy VM's address, used in the API fallback below
+    PROXY_IP_HINT="$(vm_ext_ip "$PROXY_VM" "$PROXY_ZONE")"
+    [ "$PROXY_IP_HINT" = "None" ] && PROXY_IP_HINT="0.0.0.0"
+
     info "creating $INSTANCE (this takes a few minutes)"
-    CREATE_CMD="gcloud beta sql instances create $INSTANCE
-      --database-version=$DB_VERSION
-      --cpu=1 --memory=3840MB
-      --region=$REGION --zone=$PROXY_ZONE
-      --storage-size=10
-      --root-password=$PASSWORD
-      --network=projects/$PROJECT_ID/global/networks/default
-      --allocated-ip-range-name=$PSA_RANGE
-      --project=$PROJECT_ID"
-    CREATE_LOG="$WORKDIR/create.log"
-    if $CREATE_CMD > "$CREATE_LOG" 2>&1; then
-      ok "created $INSTANCE"
-    elif gcloud sql instances create "$INSTANCE" \
-           --database-version="$DB_VERSION" --edition=ENTERPRISE \
-           --cpu=1 --memory=3840MB --region="$REGION" --zone="$PROXY_ZONE" \
-           --storage-size=10 --root-password="$PASSWORD" \
-           --network="projects/$PROJECT_ID/global/networks/default" \
-           --allocated-ip-range-name="$PSA_RANGE" \
-           --project "$PROJECT_ID" > "$CREATE_LOG" 2>&1; then
-      ok "created $INSTANCE"
-    else
+    # The private IP flags only exist on the beta command, and not every
+    # gcloud build accepts every one of them, so a few known combinations
+    # are tried in turn. Each attempt gets its own log.
+    local NET_ARG="projects/$PROJECT_ID/global/networks/default"
+    local -a ATTEMPTS=(
+      "gcloud beta sql instances create $INSTANCE --database-version=$DB_VERSION --cpu=1 --memory=3840MB --region=$REGION --root-password=$PASSWORD --network=$NET_ARG --allocated-ip-range-name=$PSA_RANGE --project=$PROJECT_ID"
+      "gcloud beta sql instances create $INSTANCE --database-version=$DB_VERSION --cpu=1 --memory=3840MB --region=$REGION --zone=$PROXY_ZONE --root-password=$PASSWORD --network=$NET_ARG --allocated-ip-range-name=$PSA_RANGE --project=$PROJECT_ID"
+      "gcloud beta sql instances create $INSTANCE --database-version=$DB_VERSION --cpu=1 --memory=3840MB --region=$REGION --zone=$PROXY_ZONE --storage-size=10 --root-password=$PASSWORD --network=$NET_ARG --allocated-ip-range-name=$PSA_RANGE --project=$PROJECT_ID"
+      "gcloud sql instances create $INSTANCE --database-version=$DB_VERSION --edition=ENTERPRISE --cpu=1 --memory=3840MB --region=$REGION --zone=$PROXY_ZONE --root-password=$PASSWORD --project=$PROJECT_ID"
+    )
+    local CREATE_LOG="" n=0
+    for CREATE_CMD in "${ATTEMPTS[@]}"; do
+      n=$((n + 1))
+      CREATE_LOG="$WORKDIR/create-$n.log"
+      if $CREATE_CMD > "$CREATE_LOG" 2>&1; then
+        ok "created $INSTANCE (attempt $n)"
+        CREATE_LOG=""
+        break
+      fi
+      dim "  attempt $n did not work:"
+      head -4 "$CREATE_LOG" | sed 's/^/    /'
+    done
+
+    if [ -n "$CREATE_LOG" ]; then
+      # as a last resort, the REST API, which has no flags to guess at
+      info "trying the Cloud SQL Admin API instead"
+      API_LOG="$WORKDIR/create-api.log"
+      TOKEN="$(gcloud auth print-access-token 2>/dev/null)"
+      if [ -n "$TOKEN" ]; then
+        curl -s -X POST "https://sqladmin.googleapis.com/sql/v1beta4/projects/$PROJECT_ID/instances" \
+          -H "Authorization: Bearer $TOKEN" \
+          -H "Content-Type: application/json" \
+          -d "{
+                \"name\": \"$INSTANCE\",
+                \"region\": \"$REGION\",
+                \"databaseVersion\": \"$DB_VERSION\",
+                \"settings\": {
+                  \"tier\": \"db-custom-1-3840\",
+                  \"edition\": \"ENTERPRISE\",
+                  \"storageSize\": 10,
+                  \"rootPassword\": \"$PASSWORD\",
+                  \"ipConfiguration\": {
+                    \"ipv4Enabled\": true,
+                    \"requireSsl\": false,
+                    \"privateNetwork\": \"$NET_ARG\",
+                    \"allocatedIpRange\": \"$PSA_RANGE\",
+                    \"authorizedNetworks\": [{ \"name\": \"wordpress\", \"value\": \"$PROXY_IP_HINT/32\" }]
+                  }
+                }
+              }" > "$API_LOG" 2>&1
+        if grep -q '"kind": "sql#instance"' "$API_LOG" 2>/dev/null; then
+          ok "created $INSTANCE through the API"
+          CREATE_LOG=""
+        fi
+      fi
+    fi
+
+    if [ -n "$CREATE_LOG" ]; then
       note_fail "could not create $INSTANCE"
       echo ""
-      dim "  the API said:"
-      grep -iE "error|invalid|policy|password|failed|not ready|denied" "$CREATE_LOG" 2>/dev/null \
-        | head -8 | sed 's/^/    /'
-      dim "  the full log is in $CREATE_LOG"
-      dim "  run it by hand to see everything:"
-      dim "    $CREATE_CMD"
+      dim "  every attempt and its error:"
+      for f in "$WORKDIR"/create-*.log "$WORKDIR"/create-api.log; do
+        [ -f "$f" ] || continue
+        dim "    $(basename "$f"):"
+        head -6 "$f" | sed 's/^/      /'
+      done
+      dim "  run the first one by hand to see everything:"
+      dim "    ${ATTEMPTS[0]}"
       return 1
     fi
   fi

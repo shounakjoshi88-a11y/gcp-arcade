@@ -1142,6 +1142,28 @@ gcloud beta sql instances create wordpress-db \
     --allocated-ip-range-name=default-ip-range
 ```
 
+### The create command is tried a few ways
+
+The private IP flags (`--network`, `--allocated-ip-range-name`) only exist on
+the `gcloud **beta** sql instances create` command, and not every gcloud build
+accepts every one of `--zone` and `--storage-size` either. A mismatch shows up
+as a bare `unrecognized arguments:` with the flag names on the next lines.
+
+So the script tries four known combinations in turn — the one that a working
+community solution uses first — and each attempt gets its own log. If they
+all fail it falls back to the **Cloud SQL Admin API**, which has no flags to
+guess at:
+
+```
+  attempt 1 did not work:
+  ERROR: (gcloud.beta.sql.instances.create) unrecognized arguments:
+  ...
+  [INFO] trying the Cloud SQL Admin API instead
+```
+
+and if that fails too, every log is printed with the exact command to run by
+hand.
+
 ### The root password has to be 8 characters or more
 
 Cloud SQL puts a password policy on new instances — at least 8 characters,

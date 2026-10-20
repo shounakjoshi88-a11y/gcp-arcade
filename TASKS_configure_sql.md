@@ -57,11 +57,41 @@ gcloud services vpc-peerings connect \
 gcloud beta sql instances create wordpress-db \
     --database-version=MYSQL_8_0 \
     --cpu=1 --memory=3840MB \
-    --region=$REGION --zone=$ZONE \
-    --storage-size=10 \
+    --region=$REGION \
     --root-password='Passw0rd1!' \
     --network=projects/$PROJECT_ID/global/networks/default \
     --allocated-ip-range-name=default-ip-range
+```
+
+> **If you get `unrecognized arguments`**, your gcloud build does not have
+> every flag on the beta command. The flags that come and go between
+> versions are `--zone` and `--storage-size`, and the private IP flags
+> (`--network`, `--allocated-ip-range-name`) only exist on the **beta**
+> command. The script tries a few known combinations in turn and then falls
+> back to the Cloud SQL Admin API, which has no flags to guess at:
+
+```bash
+curl -s -X POST "https://sqladmin.googleapis.com/sql/v1beta4/projects/$PROJECT_ID/instances" \
+  -H "Authorization: Bearer $(gcloud auth print-access-token)" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "wordpress-db",
+    "region": "europe-west1",
+    "databaseVersion": "MYSQL_8_0",
+    "settings": {
+      "tier": "db-custom-1-3840",
+      "edition": "ENTERPRISE",
+      "storageSize": 10,
+      "rootPassword": "Passw0rd1!",
+      "ipConfiguration": {
+        "ipv4Enabled": true,
+        "requireSsl": false,
+        "privateNetwork": "projects/PROJECT/global/networks/default",
+        "allocatedIpRange": "default-ip-range",
+        "authorizedNetworks": [{ "name": "wordpress", "value": "IP/32" }]
+      }
+    }
+  }'
 ```
 
 | Console setting | CLI |
