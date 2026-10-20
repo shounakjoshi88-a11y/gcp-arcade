@@ -15,6 +15,7 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp_minecraft.sh`](./gsp_minecraft.sh) | **Create and Configure Virtual Machines** | A Minecraft server VM: SSD data disk, static IP, the JRE, the server, firewall, backups and maintenance scripts | — |
 | [`gsp_iam.sh`](./gsp_iam.sh) | **Exploring IAM** | The bucket and sample file, revoking and granting project roles, the service account and the VM that runs as it | — |
 | [`gsp_storage_buckets.sh`](./gsp_storage_buckets.sh) | **Create and Manage Cloud Storage Buckets and Encryption** | The bucket, the public ACL, the customer-supplied key, the lifecycle rule and versioning | — |
+| [`gsp_configure_sql.sh`](./gsp_configure_sql.sh) | **Configure Cloud SQL** | The `wordpress-db` instance with a Private IP, the `wordpress` database and the Cloud SQL Auth Proxy | — |
 | [`gsp_storagesql.sh`](./gsp_storagesql.sh) | **Cloud Storage and Cloud SQL** — Getting Started | Web server VM, public bucket, Cloud SQL instance, and the PHP page wired to both | 100/100 |
 | [`gsp_cloudrun.sh`](./gsp_cloudrun.sh) | **Hello Cloud Run** | Node.js app, Artifact Registry repo, container image, and the Cloud Run deployment | 100/100 |
 | [`gsp_console_shell.sh`](./gsp_console_shell.sh) | **Explore the Google Cloud Console and Cloud Shell** | The console bucket, the Cloud Shell bucket, the file upload, and the persistent environment variables | — |
@@ -1091,6 +1092,96 @@ which is the whole lesson. The script keeps both keys in the work directory
 
 ---
 
+## Configure Cloud SQL
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_configure_sql.sh
+chmod +x gsp_configure_sql.sh
+./gsp_configure_sql.sh
+```
+
+| # | Checkpoint | What the script does |
+|---|---|---|
+| 1 | Create a Cloud SQL instance | the Private Services Access range and peering, then `wordpress-db` (MySQL 8.0, 1 vCPU / 3840 MB, 10 GB) ⏸ |
+| 2 | Create a database and configure a proxy on a Virtual Machine | the `wordpress` database, the Cloud SQL Auth Proxy downloaded and started on `wordpress-proxy` ⏸ |
+
+### It reads the zone from the VMs the lab gives you
+
+The lab pre-creates `wordpress-proxy` and `wordpress-private-ip`, so there is
+nothing to ask for:
+
+```bash
+ZONE=$(gcloud compute instances list --filter="name=wordpress-proxy" --format "get(zone)" | awk -F/ '{print $NF}')
+REGION=${ZONE%-*}
+```
+
+The script finds the VMs by name pattern, so it works whether the lab calls
+them `wordpress-proxy` or `wordpress-europe-proxy`.
+
+### Private Services Access is two commands
+
+The console's **Confirm network setup** button does this:
+
+```bash
+gcloud compute addresses create default-ip-range \
+    --global --purpose=VPC_PEERING --prefix-length=24 --network=default
+
+gcloud services vpc-peerings connect \
+    --service=servicenetworking.googleapis.com \
+    --ranges=default-ip-range --network=default
+```
+
+and the instance then points at the range:
+
+```bash
+gcloud beta sql instances create wordpress-db \
+    --database-version=MYSQL_8_0 --cpu=1 --memory=3840MB \
+    --region=$REGION --zone=$ZONE --storage-size=10 \
+    --root-password='...' \
+    --network=projects/$PROJECT_ID/global/networks/default \
+    --allocated-ip-range-name=default-ip-range
+```
+
+### The proxy gets `nohup`, not a bare `&`
+
+The lab starts it with `./cloud_sql_proxy ... &` from an SSH session, and
+that **dies with the session** — the checkpoint wants it running. The script
+uses `nohup` and then checks the process is actually there:
+
+```bash
+nohup ./cloud_sql_proxy -instances=$CONNECTION_NAME=tcp:3306 > proxy.log 2>&1 &
+```
+
+### Two things the script also does for you
+
+- **Allowlists the proxy VM** and turns off `requireSsl` — the lab ticks
+  *Allow unencrypted network traffic*, and the proxy connects over the public
+  IP, so the VM's address has to be on the instance's authorized networks.
+  (`--authorized-networks` wants a bare `IP/32`, not `name=IP/32`.)
+- **Prints the browser steps** for both WordPress front ends, with the right
+  database host filled in — `127.0.0.1` for the proxy one and the Cloud SQL
+  private IP for the other. The WordPress setup is a web form, so that part
+  cannot be scripted.
+
+### Options
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--project ID` | active gcloud project | Target project |
+| `--password PASS` | asked for | The Cloud SQL root password |
+| `--instance NAME` | `wordpress-db` | The Cloud SQL instance |
+| `--database NAME` | `wordpress` | The database |
+| `--db-version VER` | `MYSQL_8_0` | The database version |
+| `--proxy-vm NAME` | detected | The proxy VM |
+| `--private-vm NAME` | detected | The private IP VM |
+| `--task N` | all | Run only task N (1–2) |
+| `--yes` | off | Do not pause for the checkpoints |
+| `-h, --help` | | Usage |
+
+---
+
+---
+
 ## Cloud Storage and Cloud SQL — Getting Started
 
 ```bash
@@ -1263,6 +1354,7 @@ gsp_create_vms.sh      # Create Virtual Machines
 gsp_minecraft.sh        # Create and Configure Virtual Machines - Minecraft server
 gsp_iam.sh              # Exploring IAM
 gsp_storage_buckets.sh   # Cloud Storage buckets and encryption
+gsp_configure_sql.sh      # Configure Cloud SQL
 gsp_storagesql.sh     # Getting Started with Cloud Storage and Cloud SQL
 gsp_cloudrun.sh       # Hello Cloud Run
 gsp_console_shell.sh  # Explore the Google Cloud Console and Cloud Shell
@@ -1276,6 +1368,7 @@ TASKS_create_vms.md    # Create Virtual Machines, by hand
 TASKS_minecraft.md      # Create and Configure Virtual Machines, by hand
 TASKS_iam.md            # Exploring IAM, by hand
 TASKS_storage_buckets.md # Cloud Storage buckets and encryption, by hand
+TASKS_configure_sql.md   # Configure Cloud SQL, by hand
 TASKS_storagesql.md   # Cloud Storage and Cloud SQL, task by task, for manual runs
 TASKS_cloudrun.md     # Hello Cloud Run, task by task, for manual runs
 TASKS_console_shell.md # Explore the Google Cloud Console and Cloud Shell, by hand
