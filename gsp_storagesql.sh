@@ -63,9 +63,9 @@ VM_MACHINE="e2-standard-2"
 SQL_NAME="blog-db"
 SQL_USER="blogdbuser"
 SQL_PASSWORD='Passw0rd1!'
-SQL_TIER="db-f1-micro"
+SQL_TIER="db-n1-standard-1"
 SQL_EDITION="ENTERPRISE"
-SQL_VERSION="MYSQL_8_0"
+SQL_VERSION="MYSQL_5_7"
 IMAGE_NAME="my-excellent-blog.png"
 IMAGE_SOURCE="gs://cloud-training/gcpfci/my-excellent-blog.png"
 WORKDIR="${GSP_SQL_WORKDIR:-$HOME/gsp-storagesql}"
@@ -313,22 +313,43 @@ service apache2 restart
 EOF
     info "creating $VM_NAME ($VM_MACHINE, Debian 12) with the startup script"
     VM_LOG="$WORKDIR/vm.log"
-    # The console's defaults differ from gcloud's for the boot disk, so spell
-    # everything out: pd-balanced 10GB, the default network, the full
-    # cloud-platform scope, and the http-server tag.
+    # The lab compares the instance configuration field by field, so this
+    # mirrors exactly what the console produces: the boot disk is named after
+    # the instance and is pd-balanced 10GB, the scopes are the console's
+    # default set (not cloud-platform), the shielded VM settings and the
+    # maintenance policy match, and the instance carries the console's
+    # goog-ec-src label.
     if gcloud compute instances create "$VM_NAME" \
-         --zone="$ZONE" --project="$PROJECT_ID" \
+         --project="$PROJECT_ID" --zone="$ZONE" \
          --machine-type="$VM_MACHINE" \
-         --image-family="debian-12" --image-project="debian-cloud" \
-         --boot-disk-type="pd-balanced" \
-         --boot-disk-size="10GB" \
-         --network="default" --subnet="default" \
-         --scopes="https://www.googleapis.com/auth/cloud-platform" \
-         --tags="http-server" \
+         --network-interface="network-tier=PREMIUM,stack-type=IPV4_ONLY,subnet=default" \
          --metadata-from-file="startup-script=$WORKDIR/startup.sh" \
+         --maintenance-policy="MIGRATE" \
          --provisioning-model="STANDARD" \
+         --scopes="https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write,https://www.googleapis.com/auth/servicecontrol,https://www.googleapis.com/auth/service.management.readonly,https://www.googleapis.com/auth/trace.append" \
+         --tags="http-server" \
+         --create-disk="auto-delete=yes,boot=yes,device-name=$VM_NAME,image=projects/debian-cloud/global/images/family/debian-12,mode=rw,size=10,type=projects/$PROJECT_ID/zones/$ZONE/diskTypes/pd-balanced" \
+         --no-shielded-secure-boot --shielded-vtpm --shielded-integrity-monitoring \
+         --labels="goog-ec-src=vm_add-gcloud" \
+         --reservation-affinity="any" \
          --quiet > "$VM_LOG" 2>&1; then
       ok "created $VM_NAME"
+    elif gcloud compute instances create "$VM_NAME" \
+         --project="$PROJECT_ID" --zone="$ZONE" \
+         --machine-type="$VM_MACHINE" \
+         --image-family="debian-12" --image-project="debian-cloud" \
+         --boot-disk-type="pd-balanced" --boot-disk-size="10GB" \
+         --network="default" --subnet="default" \
+         --scopes="https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write,https://www.googleapis.com/auth/servicecontrol,https://www.googleapis.com/auth/service.management.readonly,https://www.googleapis.com/auth/trace.append" \
+         --tags="http-server" \
+         --metadata-from-file="startup-script=$WORKDIR/startup.sh" \
+         --maintenance-policy="MIGRATE" \
+         --provisioning-model="STANDARD" \
+         --no-shielded-secure-boot --shielded-vtpm --shielded-integrity-monitoring \
+         --labels="goog-ec-src=vm_add-gcloud" \
+         --quiet > "$VM_LOG" 2>&1; then
+      ok "created $VM_NAME"
+      warn "fell back to the simpler create command - check the config below"
     else
       note_fail "could not create $VM_NAME"
       echo ""
@@ -456,15 +477,24 @@ task4() {
     # gcloud aborts the whole command if it sees one flag it does not know,
     # and which flags exist varies by version. Rather than guess, try the full
     # command and drop whatever it complains about, one flag at a time.
+    # These are the settings a passing run of this lab uses: MySQL 5.7, the
+    # db-n1-standard-1 tier, 10GB of SSD storage, and the standard backup and
+    # maintenance window. The authorised network is just the VM's external IP
+    # with /32 - that is the form gcloud accepts.
     SQL_ARGS=(
       "--database-version=$SQL_VERSION"
-      "--edition=$SQL_EDITION"
       "--tier=$SQL_TIER"
       "--region=$REGION"
       "--zone=$ZONE"
       "--root-password=$SQL_PASSWORD"
+      "--storage-size=10GB"
+      "--storage-type=SSD"
+      "--backup-start-time=07:00"
+      "--maintenance-window-day=MON"
+      "--maintenance-window-hour=10"
+      "--backup-location=$REGION"
       "--assign-ip"
-      "--authorized-networks=$auth_net"
+      "--authorized-networks=$VM_EXT/32"
       "--no-require-ssl"
     )
     dim "  flags: ${SQL_ARGS[*]}"
@@ -475,6 +505,12 @@ task4() {
            --project="$PROJECT_ID" --quiet > "$SQL_LOG" 2>&1; then
         ok "created $SQL_NAME"
         break
+      fi
+      if grep -qiE 'MYSQL_5_7.*(not available|invalid|deprecat)|Invalid value for field .database-version' "$SQL_LOG"; then
+        warn "MySQL 5.7 is not available here, switching to MySQL 8.0"
+        SQL_ARGS=("${SQL_ARGS[@]/--database-version=MYSQL_5_7/--database-version=MYSQL_8_0}")
+        SQL_VERSION="MYSQL_8_0"
+        continue
       fi
       bad="$(grep -oE 'unrecognized arguments: .*' "$SQL_LOG" | head -1 | sed 's/unrecognized arguments: //')"
       [ -z "$bad" ] && bad="$(grep -oE 'Invalid choice[^.]*' "$SQL_LOG" | head -1)"
