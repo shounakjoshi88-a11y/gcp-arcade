@@ -149,6 +149,7 @@ ask_lab_locations() {
 
   local def_r="${GCP_REGION:-us-central1}" def_z="${GCP_ZONE:-us-central1-a}"
   local def_r2="us-central1" ans
+  local ZONE1_GIVEN=0 ZONE2_GIVEN=0
 
   echo ""
   warn "the lab assigns the regions and zones per lab run - they cannot be read"
@@ -157,6 +158,7 @@ ask_lab_locations() {
   dim "  Type them, or paste a zone like us-west1-c and the region fills in too."
   echo ""
 
+  # Asking for a zone answers both, so skip the follow-up question.
   if [ -n "$REGION1_OVERRIDE" ]; then
     REGION1="$REGION1_OVERRIDE"
   else
@@ -165,12 +167,12 @@ ask_lab_locations() {
     REGION1="${ans:-$def_r}"
   fi
   case "$REGION1" in
-    *-*-[a-z]) ZONE1="$REGION1"; REGION1="${REGION1%-*}" ;;
+    *-*-[a-z]) ZONE1="$REGION1"; REGION1="${REGION1%-*}"; ZONE1_GIVEN=1 ;;
   esac
 
   if [ -n "$ZONE1_OVERRIDE" ]; then
     ZONE1="$ZONE1_OVERRIDE"
-  else
+  elif [ "$ZONE1_GIVEN" != "1" ]; then
     printf "  %sZone 1%s    [%s]: " "$C_BOLD" "$C_RESET" "${ZONE1:-$def_z}"
     read -r ans
     ZONE1="${ans:-${ZONE1:-$def_z}}"
@@ -185,12 +187,12 @@ ask_lab_locations() {
     REGION2="${ans:-$def_r2}"
   fi
   case "$REGION2" in
-    *-*-[a-z]) ZONE2="$REGION2"; REGION2="${REGION2%-*}" ;;
+    *-*-[a-z]) ZONE2="$REGION2"; REGION2="${REGION2%-*}"; ZONE2_GIVEN=1 ;;
   esac
 
   if [ -n "$ZONE2_OVERRIDE" ]; then
     ZONE2="$ZONE2_OVERRIDE"
-  else
+  elif [ "$ZONE2_GIVEN" != "1" ]; then
     printf "  %sZone 2%s    [%s]: " "$C_BOLD" "$C_RESET" "${ZONE2:-$REGION2-a}"
     read -r ans
     ZONE2="${ans:-${ZONE2:-$REGION2-a}}"
@@ -291,34 +293,47 @@ pick_range() {  # a free /20 out of the 10.128.0.0/9 space
   echo "10.128.0.0/20"
 }
 
+# An auto mode network names its subnet after the NETWORK, not "default" -
+# the default network is just the case where the two names happen to match.
+# So read the real name back instead of assuming it.
+subnet_in_region() {  # $1 = network, $2 = region -> the subnet's name
+  gcloud compute networks subnets list --network="$1" \
+    --filter="region=$2" --project "$PROJECT_ID" \
+    --format="value(name)" 2>/dev/null | head -1
+}
+
+# prints the subnet's name on stdout; all the logging goes to stderr
 ensure_subnet() {  # $1 = network, $2 = region
-  local i rng
-  if gcloud compute networks subnets describe default --network="$1" \
-       --region="$2" --project "$PROJECT_ID" >/dev/null 2>&1; then
-    ok "the $2/default subnet exists"
+  local i rng name
+  name="$(subnet_in_region "$1" "$2")"
+  if [ -n "$name" ]; then
+    ok "the $2 subnet is called '$name'" >&2
+    echo "$name"
     return 0
   fi
 
-  # give auto mode a short chance to catch up
+  # give auto mode a short grace period
   for i in $(seq 1 "${GSP_SUBNET_WAIT:-12}"); do
-    if gcloud compute networks subnets describe default --network="$1" \
-         --region="$2" --project "$PROJECT_ID" >/dev/null 2>&1; then
-      ok "the $2/default subnet appeared"
+    name="$(subnet_in_region "$1" "$2")"
+    if [ -n "$name" ]; then
+      ok "the $2 subnet appeared and is called '$name'" >&2
+      echo "$name"
       return 0
     fi
     sleep 5
   done
 
-  warn "auto mode did not create the $2/default subnet - creating it"
+  warn "auto mode did not create a subnet in $2 - creating one" >&2
   rng="$(pick_range)"
-  if gcloud compute networks subnets create default --network="$1" \
+  if gcloud compute networks subnets create "$1" --network="$1" \
        --region="$2" --range="$rng" --project "$PROJECT_ID" --quiet >/dev/null 2>&1; then
-    ok "created the $2/default subnet ($rng)"
+    ok "created the $2 subnet '$1' ($rng)" >&2
+    echo "$1"
     return 0
   fi
-  note_fail "could not create the $2/default subnet"
+  note_fail "could not create a subnet in $2" >&2
   gcloud compute networks subnets list --network="$1" --project "$PROJECT_ID" \
-    --format="table(name,region,ipCidrRange)" 2>/dev/null | sed 's/^/    /'
+    --format="table(name,region,ipCidrRange)" 2>/dev/null | sed 's/^/    /' >&2
   return 1
 }
 
@@ -445,10 +460,10 @@ task2() {
     --format="value(name)" 2>/dev/null | sed 's/^/    /'
 
   info "making sure the subnets exist in $REGION1 and $REGION2"
-  ensure_subnet "$NETWORK" "$REGION1"
-  ensure_subnet "$NETWORK" "$REGION2"
+  SUBNET1="$(ensure_subnet "$NETWORK" "$REGION1")"
+  SUBNET2="$(ensure_subnet "$NETWORK" "$REGION2")"
 
-  create_vm() {  # $1 = name, $2 = zone
+  create_vm() {  # $1 = name, $2 = zone, $3 = subnet
     if instance_exists "$1" "$2"; then
       ok "$1 already exists"
       return 0
@@ -459,7 +474,7 @@ task2() {
          --zone="$2" --project="$PROJECT_ID" \
          --machine-type="$MACHINE_TYPE" \
          --image-family="debian-12" --image-project="debian-cloud" \
-         --network="$NETWORK" --subnet="default" --tags="$NETWORK" \
+         --network="$NETWORK" --subnet="$3" --tags="$NETWORK" \
          --quiet > "$VM_LOG" 2>&1; then
       ok "created $1"
     else
@@ -470,8 +485,8 @@ task2() {
     fi
   }
 
-  create_vm "$VM1" "$ZONE1"
-  create_vm "$VM2" "$ZONE2"
+  create_vm "$VM1" "$ZONE1" "$SUBNET1"
+  create_vm "$VM2" "$ZONE2" "$SUBNET2"
 
   info "waiting for the instances to boot"
   wait_running "$VM1" "$ZONE1" && ok "$VM1 is RUNNING" || warn "$VM1 is not running yet"
