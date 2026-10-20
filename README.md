@@ -13,6 +13,7 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp_pga_nat.sh`](./gsp_pga_nat.sh) | **Implement Private Google Access and Cloud NAT** | A VM with no external IP, an IAP tunnel, Private Google Access and a Cloud NAT gateway | 100/100 |
 | [`gsp_create_vms.sh`](./gsp_create_vms.sh) | **Create Virtual Machines** | The shared-core utility VM, the Windows Server VM and the custom-machine-type VM | 100/100 |
 | [`gsp_minecraft.sh`](./gsp_minecraft.sh) | **Create and Configure Virtual Machines** | A Minecraft server VM: SSD data disk, static IP, the JRE, the server, firewall, backups and maintenance scripts | — |
+| [`gsp_iam.sh`](./gsp_iam.sh) | **Exploring IAM** | The bucket and sample file, revoking and granting project roles, the service account and the VM that runs as it | — |
 | [`gsp_storagesql.sh`](./gsp_storagesql.sh) | **Cloud Storage and Cloud SQL** — Getting Started | Web server VM, public bucket, Cloud SQL instance, and the PHP page wired to both | 100/100 |
 | [`gsp_cloudrun.sh`](./gsp_cloudrun.sh) | **Hello Cloud Run** | Node.js app, Artifact Registry repo, container image, and the Cloud Run deployment | 100/100 |
 | [`gsp_console_shell.sh`](./gsp_console_shell.sh) | **Explore the Google Cloud Console and Cloud Shell** | The console bucket, the Cloud Shell bucket, the file upload, and the persistent environment variables | — |
@@ -946,6 +947,80 @@ so the earlier checkpoints stay valid, and prints the command to stop it:
 
 ---
 
+## Exploring IAM
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_iam.sh
+chmod +x gsp_iam.sh
+./gsp_iam.sh
+```
+
+| # | Checkpoint | What the script does |
+|---|---|---|
+| 1 | Create a bucket and upload a sample file | the bucket `gs://<project-id>` and a `sample.txt` object in it ⏸ |
+| 2 | Remove project access | revokes `roles/viewer` from Username 2 ⏸ |
+| 3 | Add storage permissions | grants `roles/storage.objectViewer` to Username 2 ⏸ |
+| 4 | Set up the Service Account User and create a VM | the `read-bucket-objects` service account, `roles/iam.serviceAccountUser` for `domain:altostrat.com`, `roles/compute.instanceAdmin.v1` for the same domain, and the `demoiam` VM ⏸ |
+
+### It finds Username 2 on its own
+
+This lab uses **two** Google accounts, and Username 2 is in the lab's
+Connection Details panel — not something a script can read. But it can be
+*derived*: Username 2 is the user that holds `roles/viewer` and is not you.
+
+```bash
+gcloud projects get-iam-policy $PROJECT_ID --format="json" | jq -r \
+  --arg me "user:$MY_ACCOUNT" \
+  '.bindings[] | select(.role == "roles/viewer") | .members[]?
+   | select(startswith("user:")) | select(. != $me) | sub("user:"; "")'
+```
+
+The script does that, shows you what it found, and then **asks you to
+confirm** — you can just press Enter. It also remembers the answer in
+`~/gsp-iam/.user2`, because after task 2 the user no longer holds
+`roles/viewer` and the policy alone would no longer name them.
+
+### What still needs the second browser tab
+
+The IAM changes are all made from your account, so the script does them. The
+*verification* needs a tab signed in as Username 2, so the script prints what
+to look for after each step:
+
+- **Task 3** — Username 2 can see the bucket in Cloud Storage → Buckets
+- **Task 4** — Username 2 gets an error in Cloud Storage → Buckets
+- **Task 5** — in Username 2's Cloud Shell, `gcloud storage ls gs://<bucket>` works
+
+### Task 7 and the service account's role
+
+The lab's last task changes the service account from Storage Object **Viewer**
+to Storage Object **Creator**, and the copy back then succeeds. The script
+**grants Creator without removing Viewer**, so the download from task 7 still
+works and the earlier checkpoint stays valid.
+
+Pass `--skip-role-change` to leave the service account exactly as task 6
+leaves it.
+
+### Options
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--project ID` | active gcloud project | Target project |
+| `--user2 EMAIL` | detected, then asked for | The lab's second user |
+| `--zone ZONE` | asked for | The lab's zone |
+| `--region REGION` | from the zone | The region |
+| `--bucket NAME` | the project ID | The bucket |
+| `--domain DOMAIN` | `altostrat.com` | The fake company domain |
+| `--sa NAME` | `read-bucket-objects` | The service account |
+| `--vm NAME` | `demoiam` | The VM |
+| `--task N` | all | Run only task N (3–7) |
+| `--yes` | off | Do not pause for the checkpoints |
+| `--skip-role-change` | off | Leave the service account as Storage Object Viewer |
+| `-h, --help` | | Usage |
+
+---
+
+---
+
 ## Cloud Storage and Cloud SQL — Getting Started
 
 ```bash
@@ -1116,6 +1191,7 @@ gsp_vpc_networks.sh    # Create and Configure VPC Networks
 gsp_pga_nat.sh         # Implement Private Google Access and Cloud NAT
 gsp_create_vms.sh      # Create Virtual Machines
 gsp_minecraft.sh        # Create and Configure Virtual Machines - Minecraft server
+gsp_iam.sh              # Exploring IAM
 gsp_storagesql.sh     # Getting Started with Cloud Storage and Cloud SQL
 gsp_cloudrun.sh       # Hello Cloud Run
 gsp_console_shell.sh  # Explore the Google Cloud Console and Cloud Shell
@@ -1127,6 +1203,7 @@ TASKS_vpc_networks.md  # Create and Configure VPC Networks, by hand
 TASKS_pga_nat.md       # Private Google Access and Cloud NAT, by hand
 TASKS_create_vms.md    # Create Virtual Machines, by hand
 TASKS_minecraft.md      # Create and Configure Virtual Machines, by hand
+TASKS_iam.md            # Exploring IAM, by hand
 TASKS_storagesql.md   # Cloud Storage and Cloud SQL, task by task, for manual runs
 TASKS_cloudrun.md     # Hello Cloud Run, task by task, for manual runs
 TASKS_console_shell.md # Explore the Google Cloud Console and Cloud Shell, by hand
