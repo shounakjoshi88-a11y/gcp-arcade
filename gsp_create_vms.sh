@@ -18,6 +18,8 @@
 #     --zone ZONE       the lab's zone (asked for)
 #     --region REGION   region (default: derived from the zone)
 #     --image IMAGE     the Linux boot disk image family (default: from the project)
+#     --cores N         cores for the custom machine type (default: 2)
+#     --memory MB       memory for the custom machine type (default: 4096)
 #     --windows-family F  the Windows image family (default: resolved at run time)
 #     --task N          run only task N (1-3)
 #     --yes             do not pause for the checkpoints
@@ -60,6 +62,8 @@ ZONE_OVERRIDE=""
 REGION_OVERRIDE=""
 IMAGE_OVERRIDE=""
 WINDOWS_FAMILY_OVERRIDE=""
+CORES=2
+MEMORY_MB=4096
 ONLY_TASK=""
 ASSUME_YES=0
 DO_VERIFY=1
@@ -78,6 +82,8 @@ OPTIONS:
    --zone ZONE       the lab's zone (asked for)
    --region REGION   region (default: derived from the zone)
    --image IMAGE     the Linux boot disk image family (default: from the project)
+   --cores N         cores for the custom machine type (default: 2)
+   --memory MB       memory for the custom machine type (default: 4096)
    --windows-family F  the Windows image family (default: resolved at run time)
    --task N          run only task N (1-3)
    --yes             do not pause for the checkpoints
@@ -93,6 +99,8 @@ while [ $# -gt 0 ]; do
     --zone)           ZONE_OVERRIDE="$2";           shift 2 ;;
     --region)         REGION_OVERRIDE="$2";         shift 2 ;;
     --image)          IMAGE_OVERRIDE="$2";          shift 2 ;;
+    --cores)          CORES="$2";                    shift 2 ;;
+    --memory)         MEMORY_MB="$2";                shift 2 ;;
     --windows-family) WINDOWS_FAMILY_OVERRIDE="$2"; shift 2 ;;
     --task)           ONLY_TASK="$2";               shift 2 ;;
     --yes)            ASSUME_YES=1;                 shift ;;
@@ -192,10 +200,22 @@ VM_UTIL="utility-vm"
 VM_WIN="utility-wm"
 VM_CUSTOM="utility-cm"
 
+# The console's "Series E2" + "Custom" + 2 cores + 4 GB is e2-custom-2-4096.
+# The gcloud flags --custom-cpu / --custom-memory build the type off the
+# DEFAULT machine type, which is n1-standard-1 - so they alone would give
+# n1-custom-2-4096 and the lab would not score it. The family has to be
+# spelled out.
+MT_UTIL="e2-medium"
+MT_WIN="e2-standard-2"
+MT_CUSTOM="e2-custom-${CORES}-${MEMORY_MB}"
+
 printf "%s%s  Create Virtual Machines%s\n" "$C_CYAN" "$C_BOLD" "$C_RESET"
 printf "  %sproject=%s  %szone=%s  %sregion=%s  %simage=%s  %swindows=%s%s\n" \
   "$C_DIM" "$PROJECT_ID" "$C_DIM" "$ZONE" "$C_DIM" "$REGION" "$C_DIM" "$IMAGE" \
   "$C_DIM" "$WINDOWS_FAMILY" "$C_RESET"
+printf "  %smachine types:%s %s (%s), %s (%s), %s (%s cores / %s MB)%s\n" \
+  "$C_DIM" "$C_DIM" "$VM_UTIL" "$MT_UTIL" "$VM_WIN" "$MT_WIN" "$VM_CUSTOM" \
+  "$CORES" "$MEMORY_MB" "$C_RESET"
 
 # ---------------------------------------------------------------------------
 # helpers
@@ -218,6 +238,58 @@ pause_for_check() {  # $1 = task number, $2 = checkpoint name
   printf "  %s    then press Enter here to continue.%s\n" "$C_DIM" "$C_RESET"
   printf "  %s    >%s" "$C_YELLOW" "$C_RESET"
   read -r _
+}
+
+instance_machine_type() {  # $1 = instance name
+  gcloud compute instances describe "$1" --zone "$ZONE" --project "$PROJECT_ID" \
+    --format="value(machineType)" 2>/dev/null | sed 's|.*/||'
+}
+
+# A machine type cannot be changed while the instance runs, so an instance
+# with the wrong one has to be replaced.
+ensure_machine_type() {  # $1 = instance name, $2 = wanted machine type
+  local have
+  [ -z "$2" ] && return 0
+  have="$(instance_machine_type "$1")"
+  if [ -n "$have" ] && [ "$have" != "$2" ]; then
+    warn "$1 has machine type '$have' but the lab wants '$2'"
+    info "deleting it - the machine type of a running instance cannot be changed"
+    if gcloud compute instances delete "$1" --zone "$ZONE" --project "$PROJECT_ID" \
+         --quiet >/dev/null 2>&1; then
+      ok "deleted $1"
+    else
+      note_fail "could not delete $1 - delete it by hand and re-run"
+      return 1
+    fi
+  fi
+  return 0
+}
+
+# Print what the lab grader would look at, so it can be compared with the
+# console's Details page.
+show_vm() {  # $1 = instance name
+  local name="$1" disk img disk_type disk_size ip tags
+  disk="$(gcloud compute instances describe "$name" --zone "$ZONE" --project "$PROJECT_ID" \
+          --flatten="disks" --format="value(disks.source)" 2>/dev/null | head -1 | sed 's|.*/||')"
+  img=""; disk_type=""; disk_size=""
+  if [ -n "$disk" ]; then
+    img="$(gcloud compute disks describe "$disk" --zone "$ZONE" --project "$PROJECT_ID" \
+           --format="value(sourceImage)" 2>/dev/null | sed 's|.*/||')"
+    disk_type="$(gcloud compute disks describe "$disk" --zone "$ZONE" --project "$PROJECT_ID" \
+                --format="value(type)" 2>/dev/null | sed 's|.*/||')"
+    disk_size="$(gcloud compute disks describe "$disk" --zone "$ZONE" --project "$PROJECT_ID" \
+                --format="value(sizeGb)" 2>/dev/null)"
+  fi
+  ip="$(gcloud compute instances describe "$name" --zone "$ZONE" --project "$PROJECT_ID" \
+       --format="value(networkInterfaces[0].accessConfigs[0].natIP)" 2>/dev/null)"
+  tags="$(gcloud compute instances describe "$name" --zone "$ZONE" --project "$PROJECT_ID" \
+         --format="value(tags.items)" 2>/dev/null | tr '\n' ',')"
+  dim "  --- $name, as the grader sees it ---"
+  printf "      machine type : %s\n" "$(instance_machine_type "$name")"
+  printf "      image        : %s\n" "${img:-unknown}"
+  printf "      boot disk    : %s %s GB\n" "${disk_type:-unknown}" "${disk_size:-?}"
+  printf "      external IP  : %s\n" "${ip:-none}"
+  printf "      tags         : %s\n" "${tags:-none}"
 }
 
 wait_running() {  # $1 = instance name
@@ -266,11 +338,23 @@ task1() {
   step "Task 1 - Create a utility virtual machine"
 
   if instance_exists "$VM_UTIL" "$ZONE"; then
-    ok "$VM_UTIL already exists in $ZONE"
+    ensure_machine_type "$VM_UTIL" "$MT_UTIL" || return 1
+    if instance_exists "$VM_UTIL" "$ZONE"; then
+      ok "$VM_UTIL already exists in $ZONE"
+    else
+      gcloud compute instances create "$VM_UTIL" \
+         --zone="$ZONE" --machine-type="$MT_UTIL" \
+         --network-interface="network=default,subnet=default,no-address" \
+         --image-family="$IMAGE" --image-project=debian-cloud \
+         --boot-disk-size=10GB --boot-disk-type=pd-standard \
+         --project "$PROJECT_ID" --quiet >/dev/null 2>&1 \
+         && ok "created $VM_UTIL (e2-medium, no external IP)" \
+         || note_fail "could not create $VM_UTIL"
+    fi
   else
     if gcloud compute instances create "$VM_UTIL" \
          --zone="$ZONE" \
-         --machine-type=e2-medium \
+         --machine-type="$MT_UTIL" \
          --network-interface="network=default,subnet=default,no-address" \
          --image-family="$IMAGE" --image-project=debian-cloud \
          --boot-disk-size=10GB --boot-disk-type=pd-standard \
@@ -308,6 +392,7 @@ task1() {
   printf "      %s\n" "${CPU_PLATFORM:-unknown}"
   printf "      %s\n" "${SCHEDULING:-unknown}"
   dim "  the logs are at: Compute Engine > VM instances > $VM_UTIL > Logging"
+  show_vm "$VM_UTIL"
 
   pause_for_check 1 "Create a utility virtual machine"
 }
@@ -340,11 +425,24 @@ task2() {
   create_www_rule "default-allow-https" 443 "https-server"
 
   if instance_exists "$VM_WIN" "$ZONE"; then
-    ok "$VM_WIN already exists in $ZONE"
+    ensure_machine_type "$VM_WIN" "$MT_WIN" || return 1
+    if instance_exists "$VM_WIN" "$ZONE"; then
+      ok "$VM_WIN already exists in $ZONE"
+    else
+      gcloud compute instances create "$VM_WIN" \
+         --zone="$ZONE" --machine-type="$MT_WIN" \
+         --network-interface="network=default,subnet=default" \
+         --image-family="$WINDOWS_FAMILY" --image-project=windows-cloud \
+         --boot-disk-size=64 --boot-disk-type=pd-ssd \
+         --tags="http-server,https-server" \
+         --project "$PROJECT_ID" --quiet >/dev/null 2>&1 \
+         && ok "created $VM_WIN (e2-standard-2, Windows Server 2025, 64 GB SSD)" \
+         || note_fail "could not create $VM_WIN"
+    fi
   else
     if gcloud compute instances create "$VM_WIN" \
          --zone="$ZONE" \
-         --machine-type=e2-standard-2 \
+         --machine-type="$MT_WIN" \
          --network-interface="network=default,subnet=default" \
          --image-family="$WINDOWS_FAMILY" --image-project=windows-cloud \
          --boot-disk-size=64 --boot-disk-type=pd-ssd \
@@ -376,6 +474,8 @@ task2() {
   ${C_DIM}connect to the Windows VM - that needs an RDP client on your machine.${C_RESET}
 
 EOF
+  show_vm "$VM_WIN"
+
   pause_for_check 2 "Create a Windows virtual machine"
 }
 
@@ -386,11 +486,23 @@ task3() {
   step "Task 3 - Create a custom virtual machine"
 
   if instance_exists "$VM_CUSTOM" "$ZONE"; then
-    ok "$VM_CUSTOM already exists in $ZONE"
+    ensure_machine_type "$VM_CUSTOM" "$MT_CUSTOM" || return 1
+    if instance_exists "$VM_CUSTOM" "$ZONE"; then
+      ok "$VM_CUSTOM already exists in $ZONE"
+    else
+      gcloud compute instances create "$VM_CUSTOM" \
+         --zone="$ZONE" --machine-type="$MT_CUSTOM" \
+         --network-interface="network=default,subnet=default" \
+         --image-family="$IMAGE" --image-project=debian-cloud \
+         --boot-disk-size=10GB --boot-disk-type=pd-standard \
+         --project "$PROJECT_ID" --quiet >/dev/null 2>&1 \
+         && ok "created $VM_CUSTOM ($MT_CUSTOM)" \
+         || note_fail "could not create $VM_CUSTOM"
+    fi
   else
     if gcloud compute instances create "$VM_CUSTOM" \
          --zone="$ZONE" \
-         --custom-cpu=2 --custom-memory=4GB \
+         --machine-type="$MT_CUSTOM" \
          --network-interface="network=default,subnet=default" \
          --image-family="$IMAGE" --image-project=debian-cloud \
          --boot-disk-size=10GB --boot-disk-type=pd-standard \
@@ -409,9 +521,11 @@ task3() {
     warn "$VM_CUSTOM did not report RUNNING in time"
   fi
 
-  MT="$(gcloud compute instances describe "$VM_CUSTOM" --zone "$ZONE" --project "$PROJECT_ID" \
-        --format="value(machineType)" 2>/dev/null | sed 's|.*/||')"
+  MT="$(instance_machine_type "$VM_CUSTOM")"
   ok "machine type: $MT"
+  if [ "$MT" != "$MT_CUSTOM" ]; then
+    note_fail "the machine type is $MT but the lab wants $MT_CUSTOM"
+  fi
 
   if [ "$DO_VERIFY" = "1" ]; then
     info "checking the VM over SSH"
@@ -424,6 +538,8 @@ task3() {
       warn "the SSH check did not answer - that is fine, the checkpoint is the VM itself"
     fi
   fi
+
+  show_vm "$VM_CUSTOM"
 
   pause_for_check 3 "Create a custom virtual machine"
 }
@@ -451,9 +567,9 @@ esac
 step "Summary"
 echo "  Project      : $PROJECT_ID"
 echo "  Zone / Region: $ZONE  /  $REGION"
-printf "  %-14s: e2-medium, no external IP\n" "$VM_UTIL"
-printf "  %-14s: e2-standard-2, Windows Server 2025, 64 GB pd-ssd, tags http-server,https-server\n" "$VM_WIN"
-printf "  %-14s: custom, 2 vCPU / 4 GB\n" "$VM_CUSTOM"
+printf "  %-14s: %s, no external IP\n" "$VM_UTIL" "$MT_UTIL"
+printf "  %-14s: %s, Windows Server 2025, 64 GB pd-ssd, tags http-server,https-server\n" "$VM_WIN" "$MT_WIN"
+printf "  %-14s: %s (%s cores / %s MB)\n" "$VM_CUSTOM" "$MT_CUSTOM" "$CORES" "$MEMORY_MB"
 echo ""
 echo "  Checkpoints:"
 echo "    1. Create a utility virtual machine   (30)"

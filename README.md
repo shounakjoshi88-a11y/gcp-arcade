@@ -779,6 +779,32 @@ gcloud compute images describe-from-family windows-2025 \
 and falls back to `windows-2022` and `windows-2019`, then to listing the
 families. Override it with `--windows-family` if you need to.
 
+### The custom machine type has to name the E2 series
+
+This is the one that bites. The console's *Series E2* + *Custom* + 2 cores +
+4 GB is `e2-custom-2-4096`. The gcloud flags for it are **not** equivalent:
+
+```bash
+# WRONG - the default machine type is n1-standard-1, so this makes an N1 VM
+gcloud compute instances create utility-cm --custom-cpu=2 --custom-memory=4GB
+# -> n1-custom-2-4096
+
+# RIGHT
+gcloud compute instances create utility-cm --machine-type=e2-custom-2-4096
+# -> e2-custom-2-4096
+```
+
+From the gcloud reference:
+
+> `--machine-type` — *If unspecified, the default type is `n1-standard-1`.*
+> `--custom-cpu` / `--custom-memory` — *Specifies a custom machine type. The
+> default is `n1`.*
+
+The checkpoint scores the **E2** one. The script therefore builds the name
+itself (`e2-custom-<cores>-<memory>`) and, if it finds an instance with the
+wrong machine type, deletes it and creates it again — a running instance's
+machine type cannot be changed.
+
 ### Two things the CLI cannot do
 
 **Setting the Windows password.** There is no gcloud command — the lab's
@@ -797,6 +823,8 @@ prints the console path for it.
 | `--zone ZONE` | asked for | The lab's zone |
 | `--region REGION` | from the zone | The region |
 | `--image IMAGE` | from the project metadata | The Linux boot disk image family |
+| `--cores N` | `2` | Cores for the custom machine type |
+| `--memory MB` | `4096` | Memory for the custom machine type |
 | `--windows-family F` | resolved at run time | The Windows image family |
 | `--task N` | all | Run only task N (1–3) |
 | `--yes` | off | Do not pause for the checkpoints |

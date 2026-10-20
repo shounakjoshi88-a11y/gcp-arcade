@@ -107,18 +107,45 @@ Note that the connection button on a Windows VM says **RDP**, not SSH.
 
 ## Task 3 — Create a custom virtual machine
 
-The console's **Custom** machine type with 2 cores and 4 GB:
+The console's **Custom** machine type with 2 cores and 4 GB, in the **E2**
+series. Name the machine type explicitly:
 
 ```bash
 gcloud compute instances create utility-cm \
     --zone=ZONE \
-    --custom-cpu=2 --custom-memory=4GB \
+    --machine-type=e2-custom-2-4096 \
     --network-interface=network=default,subnet=default \
     --image-family=debian-12 --image-project=debian-cloud \
     --boot-disk-size=10GB --boot-disk-type=pd-standard
 ```
 
-The resulting machine type is `e2-custom-2-4096`.
+> ### Do not use `--custom-cpu` / `--custom-memory` here
+>
+> ```bash
+> # WRONG - this makes an N1 machine, not an E2 one
+> gcloud compute instances create utility-cm --custom-cpu=2 --custom-memory=4GB
+> ```
+>
+> Those two flags build the machine type off the **default** machine type, and
+> the default is `n1-standard-1`. The gcloud reference says so:
+>
+> > `--machine-type` — *If unspecified, the default type is `n1-standard-1`.*
+> > `--custom-cpu` / `--custom-memory` — *Specifies a custom machine type. The
+> > default is `n1`.*
+>
+> So `--custom-cpu=2 --custom-memory=4GB` gives you **`n1-custom-2-4096`**,
+> while the lab's **E2** series wants **`e2-custom-2-4096`**. The checkpoint
+> does not score the N1 one. Pass `--machine-type=e2-custom-2-4096` instead.
+
+Check what you actually got:
+
+```bash
+gcloud compute instances describe utility-cm --zone=ZONE \
+    --format="value(machineType)"
+```
+
+The machine type of a running instance cannot be changed, so if you have the
+wrong one, delete the VM and create it again.
 
 Click **Check my progress** — *Create a custom virtual machine*.
 
