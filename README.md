@@ -8,7 +8,8 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp156.sh`](./gsp156.sh) | **GSP156** — Terraform Fundamentals | Installs Terraform, writes `instance.tf`, provisions a VM with Terraform | 100/100 |
 | [`gsp345.sh`](./gsp345.sh) | **GSP345** — Build Infrastructure with Terraform (Challenge Lab) | 7 tasks: modules, imports, remote GCS backend, registry module, firewall | 7/7 tasks |
 | [`gsp_marketplace.sh`](./gsp_marketplace.sh) | **Deploy a LAMP Stack with Google Cloud Marketplace** (also *Getting Started with Cloud Marketplace*) | Deploys the LAMP stack (Apache + MySQL + PHP + phpMyAdmin) and verifies the site | 100/100 |
-| [`gsp_vpc.sh`](./gsp_vpc.sh) | **VPC Networking and Compute Engine** | Auto-mode VPC, the four firewall rules, the subnets and the VMs | 100/100 |
+| [`gsp_vpc.sh`](./gsp_vpc.sh) | **Get Started with Virtual Private Cloud Networking and Compute Engine** | Auto-mode VPC, the four firewall rules, the subnets and the VMs | 100/100 |
+| [`gsp_vpc_networks.sh`](./gsp_vpc_networks.sh) | **Create and Configure VPC Networks** | The auto-mode network and its VMs, plus `managementnet` and `privatenet` in custom mode | — |
 | [`gsp_storagesql.sh`](./gsp_storagesql.sh) | **Cloud Storage and Cloud SQL** — Getting Started | Web server VM, public bucket, Cloud SQL instance, and the PHP page wired to both | 100/100 |
 | [`gsp_cloudrun.sh`](./gsp_cloudrun.sh) | **Hello Cloud Run** | Node.js app, Artifact Registry repo, container image, and the Cloud Run deployment | 100/100 |
 | [`gsp_console_shell.sh`](./gsp_console_shell.sh) | **Explore the Google Cloud Console and Cloud Shell** | The console bucket, the Cloud Shell bucket, the file upload, and the persistent environment variables | — |
@@ -551,6 +552,94 @@ copying a subnet name between labs breaks.
 
 ---
 
+## Create and Configure VPC Networks
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_vpc_networks.sh
+chmod +x gsp_vpc_networks.sh
+./gsp_vpc_networks.sh
+```
+
+A bigger sibling of `gsp_vpc.sh`. This one covers focus **19093**, which has
+three checkpoints instead of one:
+
+| # | Checkpoint | Points |
+|---|---|---|
+| 1 | Create a VPC network and VM instances | 30 |
+| 2 | Create custom mode VPC networks with firewall rules | 40 |
+| 3 | Create VM instances | 30 |
+
+| Task | What the script does |
+|---|---|
+| 1 | deletes the four `default-allow-*` firewall rules, then the `default` network |
+| 2 | creates `mynetwork` in **auto** mode, the four standard firewall rules, `allow-iap-ssh`, and the two `e2-medium` VMs — then converts the network to **custom** mode ⏸ |
+| 3 | creates `managementnet` and `privatenet` in custom mode, their three subnets and their two firewall rules ⏸, then the two `e2-micro` VMs ⏸ |
+| 4 | prints the instance table and what the connectivity tests should show |
+
+### The two zones
+
+The lab assigns **two** zones per run and they cannot be read from the
+project, so the script asks for both:
+
+```
+  Zone 1  [us-central1-a]:
+  Zone 2  [us-west1-b]:
+```
+
+The regions are derived from the zones, because the lab's `default_region` is
+the region of `default_zone`. Override them with `--region1` / `--region2`
+if your run differs.
+
+### The firewall rules the CLI does not create
+
+Ticking *all available rules* in the console creates four rules. The CLI
+creates **none** of them, so the script makes them explicitly:
+
+| Rule | Priority | Allows | Source |
+|---|---|---|---|
+| `mynetwork-allow-custom` | 65534 | all | `10.128.0.0/9` |
+| `mynetwork-allow-icmp` | 65534 | icmp | `0.0.0.0/0` |
+| `mynetwork-allow-rdp` | 65534 | tcp:3389 | `0.0.0.0/0` |
+| `mynetwork-allow-ssh` | 65534 | tcp:22 | `0.0.0.0/0` |
+| `allow-iap-ssh` | 1000 | tcp:22 | `35.235.240.0/20` (target tag `iap-gce`) |
+
+Plus `managementnet-allow-icmp-ssh-rdp` and
+`privatenet-allow-icmp-ssh-rdp` at priority 1000.
+
+### The subnet named after the network
+
+In an **auto mode** network the subnet takes the name of the **network**, and
+one is created in every region — so both VMs use `subnet=mynetwork`. Only the
+default network coincidentally uses `default`, which is why copying a subnet
+name between labs breaks.
+
+### The machine types differ between the tasks
+
+| VM | Type | Network |
+|---|---|---|
+| `mynet-us-vm`, `mynet-notus-vm` | `e2-medium` | `mynetwork` |
+| `managementnet-us-vm`, `privatenet-us-vm` | `e2-micro` | `managementnet` / `privatenet` |
+
+### Options
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--project ID` | active gcloud project | Target project |
+| `--zone1 ZONE` | asked for | The lab's first zone |
+| `--zone2 ZONE` | asked for | The lab's second zone |
+| `--region1 REGION` | from zone1 | Region for the `-us` subnets |
+| `--region2 REGION` | from zone2 | Region for the `-notus` subnet |
+| `--image IMAGE` | from the project metadata | Boot disk image family |
+| `--network NAME` | `mynetwork` | The auto mode network |
+| `--task N` | all | Run only task N (1–4) |
+| `--yes` | off | Do not pause for the checkpoints |
+| `--keep-default` | off | Do not delete the default network |
+| `-h, --help` | | Usage |
+
+---
+
+---
+
 ## Cloud Storage and Cloud SQL — Getting Started
 
 ```bash
@@ -716,7 +805,8 @@ gsp321.sh             # GSP321 - Develop Your Google Cloud Network
 gsp156.sh             # GSP156 - Terraform Fundamentals
 gsp345.sh             # GSP345 - Build Infrastructure with Terraform: Challenge Lab
 gsp_marketplace.sh    # Deploy a LAMP Stack with Google Cloud Marketplace
-gsp_vpc.sh            # VPC Networking and Compute Engine
+gsp_vpc.sh            # Get Started with VPC Networking and Compute Engine
+gsp_vpc_networks.sh    # Create and Configure VPC Networks
 gsp_storagesql.sh     # Getting Started with Cloud Storage and Cloud SQL
 gsp_cloudrun.sh       # Hello Cloud Run
 gsp_console_shell.sh  # Explore the Google Cloud Console and Cloud Shell
@@ -724,6 +814,7 @@ TASKS.md              # GSP321, task by task, for manual runs
 TASKS156.md           # GSP156, task by task, for manual runs
 TASKS345.md           # GSP345, task by task, for manual runs
 TASKS_marketplace.md  # Deploy a LAMP Stack with Cloud Marketplace, by hand
+TASKS_vpc_networks.md  # Create and Configure VPC Networks, by hand
 TASKS_storagesql.md   # Cloud Storage and Cloud SQL, task by task, for manual runs
 TASKS_cloudrun.md     # Hello Cloud Run, task by task, for manual runs
 TASKS_console_shell.md # Explore the Google Cloud Console and Cloud Shell, by hand
