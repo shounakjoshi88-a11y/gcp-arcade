@@ -2,17 +2,20 @@
 
 Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 
-| Script | Lab | What it does |
-|---|---|---|
-| [`gsp321.sh`](./gsp321.sh) | **GSP321** — Develop Your Google Cloud Network | Dev + prod VPCs, bastion, Cloud SQL, GKE, WordPress, uptime check, IAM |
-| [`gsp156.sh`](./gsp156.sh) | **GSP156** — Terraform Fundamentals | Installs Terraform, writes `instance.tf`, provisions a VM with Terraform |
-| [`gsp345.sh`](./gsp345.sh) | **GSP345** — Build Infrastructure with Terraform (Challenge Lab) | 7 tasks: modules, imports, remote GCS backend, registry module, firewall |
-| [`gsp_marketplace.sh`](./gsp_marketplace.sh) | **Cloud Marketplace** — Getting Started with Cloud Marketplace | Deploys the LAMP stack (Apache + MySQL + PHP + phpMyAdmin) and verifies the site |
-| [`gsp_storagesql.sh`](./gsp_storagesql.sh) | **Cloud Storage and Cloud SQL** — Getting Started | Web server VM, public bucket, Cloud SQL instance, and the PHP page wired to both |
-| [`gsp_cloudrun.sh`](./gsp_cloudrun.sh) | **Hello Cloud Run** | Node.js app, Artifact Registry repo, container image, and the Cloud Run deployment |
+| Script | Lab | What it does | Score |
+|---|---|---|---|
+| [`gsp321.sh`](./gsp321.sh) | **GSP321** — Develop Your Google Cloud Network | Dev + prod VPCs, bastion, Cloud SQL, GKE, WordPress, uptime check, IAM | 20/20 |
+| [`gsp156.sh`](./gsp156.sh) | **GSP156** — Terraform Fundamentals | Installs Terraform, writes `instance.tf`, provisions a VM with Terraform | 100/100 |
+| [`gsp345.sh`](./gsp345.sh) | **GSP345** — Build Infrastructure with Terraform (Challenge Lab) | 7 tasks: modules, imports, remote GCS backend, registry module, firewall | 7/7 tasks |
+| [`gsp_marketplace.sh`](./gsp_marketplace.sh) | **Cloud Marketplace** — Getting Started with Cloud Marketplace | Deploys the LAMP stack (Apache + MySQL + PHP + phpMyAdmin) and verifies the site | passed |
+| [`gsp_vpc.sh`](./gsp_vpc.sh) | **VPC Networking and Compute Engine** | Auto-mode VPC, the four firewall rules, the subnets and the VMs | 100/100 |
+| [`gsp_storagesql.sh`](./gsp_storagesql.sh) | **Cloud Storage and Cloud SQL** — Getting Started | Web server VM, public bucket, Cloud SQL instance, and the PHP page wired to both | 100/100 |
+| [`gsp_cloudrun.sh`](./gsp_cloudrun.sh) | **Hello Cloud Run** | Node.js app, Artifact Registry repo, container image, and the Cloud Run deployment | 100/100 |
 
-Both scripts are **idempotent** — re-run them after any failure and they
-skip whatever already exists. Both exit `0` when every step succeeded and `1`
+*Score* is what the lab console reported after running the script.
+
+Every script is **idempotent** — re-run them after any failure and they
+skip whatever already exists. They exit `0` when every step succeeded and `1`
 if a step reported a failure (the rest of the lab still runs).
 
 ---
@@ -469,6 +472,51 @@ start answering. The script polls it and tells you the URL either way.
 
 ---
 
+## VPC Networking and Compute Engine
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_vpc.sh
+chmod +x gsp_vpc.sh
+./gsp_vpc.sh
+```
+
+Deletes the default network, creates an **auto mode** VPC with the four
+standard firewall rules and its subnets, creates the two VMs, then removes
+three of the firewall rules one at a time to show what each one was doing.
+
+| Task | What the script does |
+|---|---|
+| 1 | deletes `default`, creates the auto-mode VPC `mynetwork` with `allow-ssh`, `allow-rdp`, `allow-http` and `allow-icmp` |
+| 2 | creates `mynet-us-vm` and `mynet-r2-vm` in the two lab regions ⏸ |
+| 3 | removes `allow-rdp`, `allow-http` and `allow-icmp`, leaving `allow-ssh` |
+
+It pauses between task 2 and task 3, because the single checkpoint is scored
+right after task 2 and task 3 **deletes** three of the firewall rules.
+
+### The subnet name gotcha
+
+In an **auto mode** network the subnet is named after the **network**, not
+`default` — so the subnets of `mynetwork` are `mynetwork`, `mynetwork-r2`,
+etc. Only the default network coincidentally uses `default`, which is why
+copying a subnet name between labs breaks.
+
+### Options
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--project ID` | active gcloud project | Target project |
+| `--region1 R` | asked for | Region for `mynet-us-vm` |
+| `--zone1 Z` | asked for | Zone for `mynet-us-vm` |
+| `--region2 R` | asked for | Region for `mynet-r2-vm` |
+| `--zone2 Z` | asked for | Zone for `mynet-r2-vm` |
+| `--network NAME` | `mynetwork` | VPC network name |
+| `--workdir PATH` | `$HOME/gsp-vpc` | Where the logs are written |
+| `--task N` | all | Run only task N (1–3) |
+| `--yes` | off | Do not pause for the checkpoint |
+| `-h, --help` | | Usage |
+
+---
+
 ## Cloud Storage and Cloud SQL — Getting Started
 
 ```bash
@@ -524,6 +572,27 @@ The region is assigned per lab run, so the script asks for it. The base image
 for the `Dockerfile` defaults to `node:20`; pass `--node-image` if your lab
 page names a different one.
 
+### If the deploy looks like it has hung
+
+It hasn't. The **first** revision has to pull the container image out of
+Artifact Registry before it can become ready, and that usually takes 3–5
+minutes. The script streams gcloud's output as it arrives, with a
+`... still working (30s elapsed)` heartbeat, so you can see it moving.
+
+Watch it from a second tab:
+
+```bash
+gcloud run services describe helloworld --region=$LOCATION \
+    --format="value(status.latestReadyRevisionName,status.url)"
+```
+
+Re-running `gcloud run deploy` after an interrupt is safe — it creates a new
+revision. Or use the script's own retry:
+
+```bash
+./gsp_cloudrun.sh --task 5
+```
+
 ---
 
 ## Layout
@@ -531,17 +600,20 @@ page names a different one.
 
 
 ```
-gsp321.sh            # GSP321 - Develop Your Google Cloud Network
-gsp156.sh            # GSP156 - Terraform Fundamentals
-gsp345.sh            # GSP345 - Build Infrastructure with Terraform: Challenge Lab
-gsp_marketplace.sh   # Getting Started with Cloud Marketplace - LAMP stack
-gsp_storagesql.sh  # Getting Started with Cloud Storage and Cloud SQL
-gsp_cloudrun.sh   # Hello Cloud Run
-TASKS.md             # GSP321, task by task, for manual runs
-TASKS156.md          # GSP156, task by task, for manual runs
-TASKS345.md          # GSP345, task by task, for manual runs
-TASKS_storagesql.md # Cloud Storage and Cloud SQL, task by task, for manual runs
-README.md            # this file
+gsp321.sh             # GSP321 - Develop Your Google Cloud Network
+gsp156.sh             # GSP156 - Terraform Fundamentals
+gsp345.sh             # GSP345 - Build Infrastructure with Terraform: Challenge Lab
+gsp_marketplace.sh    # Getting Started with Cloud Marketplace - LAMP stack
+gsp_vpc.sh            # VPC Networking and Compute Engine
+gsp_storagesql.sh     # Getting Started with Cloud Storage and Cloud SQL
+gsp_cloudrun.sh       # Hello Cloud Run
+TASKS.md              # GSP321, task by task, for manual runs
+TASKS156.md           # GSP156, task by task, for manual runs
+TASKS345.md           # GSP345, task by task, for manual runs
+TASKS_storagesql.md   # Cloud Storage and Cloud SQL, task by task, for manual runs
+TASKS_cloudrun.md     # Hello Cloud Run, task by task, for manual runs
+README.md             # this file
+LICENSE               # MIT
 ```
 
 ## Credits
