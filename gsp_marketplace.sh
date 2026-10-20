@@ -54,6 +54,7 @@ note_fail() { err "$1"; FAILURES=$((FAILURES + 1)); }
 
 PROJECT_OVERRIDE=""
 ZONE_OVERRIDE=""
+ZONE_FROM_USER=0
 REGION_OVERRIDE=""
 DEPLOYMENT="lamp-1"
 MACHINE_TYPE="e2-medium"
@@ -62,6 +63,7 @@ INSTANCE_NAME="lamp-1-vm"
 WORKDIR="${GSP_MKT_WORKDIR:-$HOME/gsp-marketplace}"
 VERIFY_ONLY=0
 DO_DESTROY=0
+ASSUME_YES=0
 
 # The lab setup panel states the region and zone. They are injected per lab
 # run, so they cannot be detected from the project - the closest thing to a
@@ -130,9 +132,27 @@ GCP_REGION="$(gcloud config get-value compute/region 2>/dev/null)"
 [ "$GCP_ZONE" = "(unset)" ] && GCP_ZONE=""
 [ "$GCP_REGION" = "(unset)" ] && GCP_REGION=""
 
+# The lab assigns the zone per lab run and it cannot be read from the
+# project, so ask for it. Accepts a zone like asia-east1-a.
+ask_lab_zone() {
+  if [ -n "$ZONE_OVERRIDE" ] || [ "${ASSUME_YES:-0}" = "1" ]; then return 0; fi
+  local ans def="${LAB_ZONE:-${GCP_ZONE:-us-central1-b}}"
+  echo ""
+  warn "the lab assigns the zone per lab run - it cannot be read from the project"
+  dim "  it is on your lab setup panel (Zone). Type it, or paste one like asia-east1-a."
+  printf "  %sZone%s  [%s]: " "$C_BOLD" "$C_RESET" "$def"
+  read -r ans
+  ZONE_OVERRIDE="${ans:-$def}"
+  ZONE_FROM_USER=1
+  echo ""
+}
+
+ask_lab_zone
+
 if [ -n "$ZONE_OVERRIDE" ]; then
   ZONE="$ZONE_OVERRIDE"
   ZONE_SOURCE="the --zone flag"
+  [ "$ZONE_FROM_USER" = "1" ] && ZONE_SOURCE="the value you entered"
 elif [ -n "$LAB_ZONE" ]; then
   ZONE="$LAB_ZONE"
   ZONE_SOURCE="this lab's default zone"
@@ -144,8 +164,10 @@ if [ -n "$ZONE_OVERRIDE" ] && [ -z "$REGION_OVERRIDE" ]; then
   REGION="${ZONE_OVERRIDE%-*}"
 elif [ -n "$REGION_OVERRIDE" ]; then
   REGION="$REGION_OVERRIDE"
-elif [ -n "$LAB_REGION" ]; then
-  REGION="$LAB_REGION"
+elif [ -n "$REGION_OVERRIDE" ]; then
+  REGION="$REGION_OVERRIDE"
+elif [ -n "$ZONE_OVERRIDE" ] || [ -n "$LAB_ZONE" ]; then
+  REGION="${ZONE%-*}"
 else
   REGION="${GCP_REGION:-${CLOUDSDK_COMPUTE_REGION:-${ZONE%-*}}}"
 fi

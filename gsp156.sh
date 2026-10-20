@@ -66,6 +66,8 @@ note_fail() { err "$1"; FAILURES=$((FAILURES + 1)); }
 # ---------------------------------------------------------------------------
 PROJECT_OVERRIDE=""
 ZONE_OVERRIDE=""
+ZONE_FROM_USER=0
+ASSUME_YES=0
 REGION_OVERRIDE=""
 IMAGE_OVERRIDE=""
 MACHINE_TYPE="e2-medium"
@@ -197,9 +199,27 @@ detect_zone() {
   return 0
 }
 
+# The lab assigns the zone per lab run and it cannot be read from the
+# project, so ask for it. Accepts a zone like us-west4-b.
+ask_lab_zone() {
+  if [ -n "$ZONE_OVERRIDE" ] || [ "${ASSUME_YES:-0}" = "1" ]; then return 0; fi
+  local ans def="${LAB_ZONE:-${GCP_ZONE:-us-central1-a}}"
+  echo ""
+  warn "the lab assigns the zone per lab run - it cannot be read from the project"
+  dim "  it is on your lab setup panel (Zone). Type it, or paste one like us-west4-b."
+  printf "  %sZone%s  [%s]: " "$C_BOLD" "$C_RESET" "$def"
+  read -r ans
+  ZONE_OVERRIDE="${ans:-$def}"
+  ZONE_FROM_USER=1
+  echo ""
+}
+
+ask_lab_zone
+
 ZONE_SOURCE="the --zone flag"
 if [ -n "$ZONE_OVERRIDE" ]; then
   ZONE="$ZONE_OVERRIDE"
+  [ "$ZONE_FROM_USER" = "1" ] && ZONE_SOURCE="the value you entered"
 else
   detect_zone
 fi

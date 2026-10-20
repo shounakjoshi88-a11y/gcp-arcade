@@ -135,14 +135,75 @@ REGION2_SOURCE="the lab default"
 [ -n "$REGION2_OVERRIDE" ] && REGION2_SOURCE="the --region2 flag"
 ZONE2="${ZONE2_OVERRIDE:-$LAB_ZONE2}"
 
+# The lab assigns the regions and zones per lab run and they cannot be read
+# from the project, so ask for them. Answer with a region ("us-west1") or a
+# zone ("us-west1-c") - a zone fills the region in as well.
+ask_lab_locations() {
+  if [ -n "$REGION1_OVERRIDE" ] && [ -n "$ZONE1_OVERRIDE" ] && \
+     [ -n "$REGION2_OVERRIDE" ] && [ -n "$ZONE2_OVERRIDE" ]; then
+    return 0
+  fi
+  if [ "$ASSUME_YES" = "1" ]; then
+    return 0
+  fi
+
+  local def_r="${GCP_REGION:-us-central1}" def_z="${GCP_ZONE:-us-central1-a}"
+  local def_r2="us-central1" ans
+
+  echo ""
+  warn "the lab assigns the regions and zones per lab run - they cannot be read"
+  dim "  from the project. They are on your lab setup panel (Region / Zone) and"
+  dim "  in the task text, which says 'Create a VM instance in <region>'."
+  dim "  Type them, or paste a zone like us-west1-c and the region fills in too."
+  echo ""
+
+  if [ -n "$REGION1_OVERRIDE" ]; then
+    REGION1="$REGION1_OVERRIDE"
+  else
+    printf "  %sRegion 1%s  [%s]: " "$C_BOLD" "$C_RESET" "$def_r"
+    read -r ans
+    REGION1="${ans:-$def_r}"
+  fi
+  case "$REGION1" in
+    *-*-[a-z]) ZONE1="$REGION1"; REGION1="${REGION1%-*}" ;;
+  esac
+
+  if [ -n "$ZONE1_OVERRIDE" ]; then
+    ZONE1="$ZONE1_OVERRIDE"
+  else
+    printf "  %sZone 1%s    [%s]: " "$C_BOLD" "$C_RESET" "${ZONE1:-$def_z}"
+    read -r ans
+    ZONE1="${ans:-${ZONE1:-$def_z}}"
+  fi
+
+  [ "$def_r2" = "$REGION1" ] && def_r2="us-east1"
+  if [ -n "$REGION2_OVERRIDE" ]; then
+    REGION2="$REGION2_OVERRIDE"
+  else
+    printf "  %sRegion 2%s  [%s]: " "$C_BOLD" "$C_RESET" "$def_r2"
+    read -r ans
+    REGION2="${ans:-$def_r2}"
+  fi
+  case "$REGION2" in
+    *-*-[a-z]) ZONE2="$REGION2"; REGION2="${REGION2%-*}" ;;
+  esac
+
+  if [ -n "$ZONE2_OVERRIDE" ]; then
+    ZONE2="$ZONE2_OVERRIDE"
+  else
+    printf "  %sZone 2%s    [%s]: " "$C_BOLD" "$C_RESET" "${ZONE2:-$REGION2-a}"
+    read -r ans
+    ZONE2="${ans:-${ZONE2:-$REGION2-a}}"
+  fi
+  echo ""
+}
+
+ask_lab_locations
 printf "%s%s  Virtual Private Cloud Networking and Compute Engine%s\n" "$C_CYAN" "$C_BOLD" "$C_RESET"
 printf "  %sproject=%s  %sregion1=%s  %szone1=%s  %sregion2=%s  %szone2=%s  %snetwork=%s%s\n" \
   "$C_DIM" "$PROJECT_ID" "$C_DIM" "$REGION1" "$C_DIM" "$ZONE1" "$C_DIM" "$REGION2" \
   "$C_DIM" "$ZONE2" "$C_DIM" "$NETWORK" "$C_RESET"
 
-printf "  %sYour lab setup panel says Region %s / Zone %s. The lab's second region is %s / %s.%s\n" "$C_DIM" "$REGION1" "$ZONE1" "$REGION2" "$ZONE2" "$C_RESET"
-printf "  %sIf the lab page says different values, re-run with:%s\n" "$C_DIM" "$C_RESET"
-printf "  %s  ./gsp_vpc.sh --region1 <r> --zone1 <z> --region2 <r> --zone2 <z>%s\n" "$C_DIM" "$C_RESET"
 
 if [ "$REGION1" = "$REGION2" ]; then
   err "region1 and region2 are both $REGION1 - the lab needs two different regions"
