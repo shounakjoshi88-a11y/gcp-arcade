@@ -20,6 +20,7 @@
 #     --workdir PATH    where the files are staged (default: $HOME/gsp-storagesql)
 #     --task N          run only task N (2-6)
 #     --yes             do not pause for the checkpoints
+#     --recreate        delete and recreate the VM with the current settings
 #     -h, --help        this help
 #
 #  NOTES:
@@ -55,6 +56,7 @@ REGION_OVERRIDE=""
 LOCATION_OVERRIDE=""
 ONLY_TASK=""
 ASSUME_YES=0
+RECREATE=0
 
 VM_NAME="bloghost"
 VM_MACHINE="e2-standard-2"
@@ -67,6 +69,11 @@ SQL_VERSION="MYSQL_8_0"
 IMAGE_NAME="my-excellent-blog.png"
 IMAGE_SOURCE="gs://cloud-training/gcpfci/my-excellent-blog.png"
 WORKDIR="${GSP_SQL_WORKDIR:-$HOME/gsp-storagesql}"
+
+# The lab's values, from its setup panel and task text.
+LAB_REGION="us-east1"
+LAB_ZONE="us-east1-b"
+LAB_LOCATION="US"
 
 usage() {
   cat <<'USAGE_END'
@@ -85,6 +92,7 @@ OPTIONS:
    --workdir PATH    where the files are staged (default: $HOME/gsp-storagesql)
    --task N          run only task N (2-6)
    --yes             do not pause for the checkpoints
+   --recreate        delete and recreate the VM with the current settings
    -h, --help        this help
 USAGE_END
   exit 0
@@ -99,6 +107,7 @@ while [ $# -gt 0 ]; do
     --workdir)  WORKDIR="$2";          shift 2 ;;
     --task)     ONLY_TASK="$2";        shift 2 ;;
     --yes)      ASSUME_YES=1;          shift ;;
+    --recreate) RECREATE=1;            shift ;;
     -h|--help)  usage ;;
     *) echo "Unknown option: $1 (try --help)" >&2; exit 2 ;;
   esac
@@ -127,12 +136,8 @@ ask_lab_zone() {
   if [ "$ASSUME_YES" = "1" ] && [ -n "$ZONE_OVERRIDE" ]; then return 0; fi
 
   local ans def_z def_r
-  def_z="$(gcloud config get-value compute/zone 2>/dev/null)"
-  [ "$def_z" = "(unset)" ] && def_z=""
-  [ -z "$def_z" ] && def_z="us-central1-a"
-  def_r="$(gcloud config get-value compute/region 2>/dev/null)"
-  [ "$def_r" = "(unset)" ] && def_r=""
-  [ -z "$def_r" ] && def_r="${def_z%-*}"
+  def_z="$LAB_ZONE"
+  def_r="$LAB_REGION"
 
   echo ""
   warn "the lab assigns the region and the zone per lab run - they cannot be read"
@@ -172,7 +177,8 @@ derive_location() {
 
 ask_lab_zone
 
-LOCATION="${LOCATION_OVERRIDE:-$(derive_location "$REGION")}"
+LOCATION="${LOCATION_OVERRIDE:-$LAB_LOCATION}"
+[ -z "$LOCATION" ] && LOCATION="$(derive_location "$REGION")"
 
 printf "%s%s  Getting Started with Cloud Storage and Cloud SQL%s\n" "$C_CYAN" "$C_BOLD" "$C_RESET"
 printf "  %sproject=%s  %sregion=%s  %szone=%s  %sbucket location=%s  %sbucket=%s%s\n" \
@@ -255,6 +261,12 @@ wait_for_sql() {
 task2() {
   step "Task 2 - Deploy a web server VM instance"
 
+  if [ "$RECREATE" = "1" ] && vm_exists; then
+    warn "--recreate given, deleting $VM_NAME first"
+    gcloud compute instances delete "$VM_NAME" --zone="$ZONE" --project="$PROJECT_ID" --quiet >/dev/null 2>&1
+    sleep 10
+  fi
+
   if vm_exists; then
     ok "$VM_NAME already exists"
   else
@@ -265,12 +277,20 @@ service apache2 restart
 EOF
     info "creating $VM_NAME ($VM_MACHINE, Debian 12) with the startup script"
     VM_LOG="$WORKDIR/vm.log"
+    # The console's defaults differ from gcloud's for the boot disk, so spell
+    # everything out: pd-balanced 10GB, the default network, the full
+    # cloud-platform scope, and the http-server tag.
     if gcloud compute instances create "$VM_NAME" \
          --zone="$ZONE" --project="$PROJECT_ID" \
          --machine-type="$VM_MACHINE" \
          --image-family="debian-12" --image-project="debian-cloud" \
+         --boot-disk-type="pd-balanced" \
+         --boot-disk-size="10GB" \
+         --network="default" --subnet="default" \
+         --scopes="https://www.googleapis.com/auth/cloud-platform" \
          --tags="http-server" \
          --metadata-from-file="startup-script=$WORKDIR/startup.sh" \
+         --provisioning-model="STANDARD" \
          --quiet > "$VM_LOG" 2>&1; then
       ok "created $VM_NAME"
     else
@@ -307,6 +327,17 @@ EOF
   else
     ok "the default-allow-http firewall rule exists"
   fi
+
+  # show exactly what was created - the lab compares the configuration field
+  # by field, so it has to be visible
+  echo ""
+  info "the instance as it now stands:"
+  gcloud compute instances describe "$VM_NAME" --zone="$ZONE" --project="$PROJECT_ID" \
+    --format="table(name,zone,machineType,disks[0].diskTypeGb,disks[0].initializeParams.sourceImage,tags.items,networkInterfaces[0].network,networkInterfaces[0].subnetwork)" \
+    2>/dev/null | sed 's/^/    /'
+  dim "    startup script: $(gcloud compute instances describe "$VM_NAME" --zone="$ZONE" --project="$PROJECT_ID" --format="value(metadata.items)" 2>/dev/null | tr ';' '\n' | grep -A1 startup-script | tail -1 | cut -c1-90)"
+  dim "    firewall: $(gcloud compute firewall-rules describe default-allow-http --project="$PROJECT_ID" --format="value(name,network,sourceRanges,targetTags)" 2>/dev/null | tr ';' ' ')"
+  echo ""
 
   # wait for apache to come up so the site answers
   info "waiting for Apache to start serving"
