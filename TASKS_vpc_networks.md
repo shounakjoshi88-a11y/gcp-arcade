@@ -171,6 +171,24 @@ gcloud compute instances create privatenet-us-vm \
 
 Click **Check my progress** — *Create VM instances*.
 
+### The multiple-choice question in task 4
+
+*Which firewall rule allows the ping to `mynet-notus-vm`'s external IP
+address?*
+
+| Option | Answer |
+|---|---|
+| `mynetwork-allow-ssh` | No — tcp:22, not ICMP |
+| `mynetwork-allow-rdp` | No — tcp:3389, not ICMP |
+| `mynetwork-allow-custom` | No — it allows ICMP, but only from `10.128.0.0/9`, the **internal** range |
+| `mynetwork-allow-icmp` | **Yes** — icmp from `0.0.0.0/0`, so it covers the external address too |
+
+`mynetwork-allow-custom` is the trap: it does allow ICMP, but only for traffic
+*inside* the network. An external ping arrives from outside `10.128.0.0/9`,
+so only `mynetwork-allow-icmp` covers it. The lab puts it as: *"public access
+to those instances is only controlled by the ICMP firewall rules that you
+established earlier."*
+
 ## Task 4 — Explore the connectivity across networks
 
 ```bash
