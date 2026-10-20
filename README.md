@@ -14,6 +14,7 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp_create_vms.sh`](./gsp_create_vms.sh) | **Create Virtual Machines** | The shared-core utility VM, the Windows Server VM and the custom-machine-type VM | 100/100 |
 | [`gsp_minecraft.sh`](./gsp_minecraft.sh) | **Create and Configure Virtual Machines** | A Minecraft server VM: SSD data disk, static IP, the JRE, the server, firewall, backups and maintenance scripts | — |
 | [`gsp_iam.sh`](./gsp_iam.sh) | **Exploring IAM** | The bucket and sample file, revoking and granting project roles, the service account and the VM that runs as it | — |
+| [`gsp_storage_buckets.sh`](./gsp_storage_buckets.sh) | **Create and Manage Cloud Storage Buckets and Encryption** | The bucket, the public ACL, the customer-supplied key, the lifecycle rule and versioning | — |
 | [`gsp_storagesql.sh`](./gsp_storagesql.sh) | **Cloud Storage and Cloud SQL** — Getting Started | Web server VM, public bucket, Cloud SQL instance, and the PHP page wired to both | 100/100 |
 | [`gsp_cloudrun.sh`](./gsp_cloudrun.sh) | **Hello Cloud Run** | Node.js app, Artifact Registry repo, container image, and the Cloud Run deployment | 100/100 |
 | [`gsp_console_shell.sh`](./gsp_console_shell.sh) | **Explore the Google Cloud Console and Cloud Shell** | The console bucket, the Cloud Shell bucket, the file upload, and the persistent environment variables | — |
@@ -1021,6 +1022,75 @@ leaves it.
 
 ---
 
+## Create and Manage Cloud Storage Buckets and Encryption
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_storage_buckets.sh
+chmod +x gsp_storage_buckets.sh
+./gsp_storage_buckets.sh
+```
+
+| # | Checkpoint | What the script does |
+|---|---|---|
+| 1 | Create a Cloud Storage bucket | the bucket, with fine-grained access and public access prevention off, plus the three sample files ⏸ |
+| 2 | Make file publicly readable | uploads `setup.html`, sets the ACL to private, then binds `allUsers` to `roles/storage.legacyObjectReader` ⏸ |
+| 3 | Customer-supplied encryption keys (CSEK) | generates a 32 byte key, writes it into `~/.boto`, and uploads `setup2.html` and `setup3.html` encrypted ⏸ |
+| 4 | Enable lifecycle management | the delete-after-31-days policy ⏸ |
+| 5 | Enable versioning | turns versioning on, then makes versions and recovers the original ⏸ |
+
+### The bucket needs two specific settings
+
+The lab asks for **fine-grained** access and for **public access prevention to
+be unchecked**. Both are needed, or step 2 cannot make an object public:
+
+```bash
+gcloud storage buckets update gs://$BUCKET --no-uniform-bucket-level-access
+gcloud storage buckets update gs://$BUCKET --public-access-prevention=inherited
+```
+
+### The customer-supplied key, two ways
+
+The lab puts the key in `~/.boto` and lets gsutil pick it up. The script does
+that **and** passes the key explicitly on every call, so the commands work
+whatever the boto file looks like:
+
+```bash
+gsutil -o "GS:encryption_key=$KEY" cp setup2.html gs://$BUCKET/
+```
+
+The boto file is edited by **option name**, not by line number — the lab's
+`nano` instructions have you find the `#encryption_key=` line, and the line
+number moves between gsutil versions.
+
+### The rotation, and the point of it
+
+Task 4 rewrites `setup2.html` with a **new** key and leaves `setup3.html` with
+the old one:
+
+```bash
+gsutil -o "GS:encryption_key=$NEW" -o "GS:decryption_key1=$OLD" rewrite -k gs://$BUCKET/setup2.html
+```
+
+So `setup2.html` reads back with the new key and `setup3.html` only reads
+back with the old one. If you lose the old key, that object is unreadable —
+which is the whole lesson. The script keeps both keys in the work directory
+(`~/gsp-storage-buckets/csek1` and `csek2`).
+
+### Options
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--project ID` | active gcloud project | Target project |
+| `--region REGION` | asked for | The bucket's region |
+| `--bucket NAME` | the project ID | The bucket |
+| `--task N` | all | Run only task N (1–7) |
+| `--yes` | off | Do not pause for the checkpoints |
+| `-h, --help` | | Usage |
+
+---
+
+---
+
 ## Cloud Storage and Cloud SQL — Getting Started
 
 ```bash
@@ -1192,6 +1262,7 @@ gsp_pga_nat.sh         # Implement Private Google Access and Cloud NAT
 gsp_create_vms.sh      # Create Virtual Machines
 gsp_minecraft.sh        # Create and Configure Virtual Machines - Minecraft server
 gsp_iam.sh              # Exploring IAM
+gsp_storage_buckets.sh   # Cloud Storage buckets and encryption
 gsp_storagesql.sh     # Getting Started with Cloud Storage and Cloud SQL
 gsp_cloudrun.sh       # Hello Cloud Run
 gsp_console_shell.sh  # Explore the Google Cloud Console and Cloud Shell
@@ -1204,6 +1275,7 @@ TASKS_pga_nat.md       # Private Google Access and Cloud NAT, by hand
 TASKS_create_vms.md    # Create Virtual Machines, by hand
 TASKS_minecraft.md      # Create and Configure Virtual Machines, by hand
 TASKS_iam.md            # Exploring IAM, by hand
+TASKS_storage_buckets.md # Cloud Storage buckets and encryption, by hand
 TASKS_storagesql.md   # Cloud Storage and Cloud SQL, task by task, for manual runs
 TASKS_cloudrun.md     # Hello Cloud Run, task by task, for manual runs
 TASKS_console_shell.md # Explore the Google Cloud Console and Cloud Shell, by hand
