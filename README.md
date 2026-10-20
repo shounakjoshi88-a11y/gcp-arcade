@@ -11,6 +11,7 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp_vpc.sh`](./gsp_vpc.sh) | **Get Started with Virtual Private Cloud Networking and Compute Engine** | Auto-mode VPC, the four firewall rules, the subnets and the VMs | 100/100 |
 | [`gsp_vpc_networks.sh`](./gsp_vpc_networks.sh) | **Create and Configure VPC Networks** | The auto-mode network and its VMs, plus `managementnet` and `privatenet` in custom mode | 100/100 |
 | [`gsp_pga_nat.sh`](./gsp_pga_nat.sh) | **Implement Private Google Access and Cloud NAT** | A VM with no external IP, an IAP tunnel, Private Google Access and a Cloud NAT gateway | 100/100 |
+| [`gsp_create_vms.sh`](./gsp_create_vms.sh) | **Create Virtual Machines** | The shared-core utility VM, the Windows Server VM and the custom-machine-type VM | — |
 | [`gsp_storagesql.sh`](./gsp_storagesql.sh) | **Cloud Storage and Cloud SQL** — Getting Started | Web server VM, public bucket, Cloud SQL instance, and the PHP page wired to both | 100/100 |
 | [`gsp_cloudrun.sh`](./gsp_cloudrun.sh) | **Hello Cloud Run** | Node.js app, Artifact Registry repo, container image, and the Cloud Run deployment | 100/100 |
 | [`gsp_console_shell.sh`](./gsp_console_shell.sh) | **Explore the Google Cloud Console and Cloud Shell** | The console bucket, the Cloud Shell bucket, the file upload, and the persistent environment variables | — |
@@ -727,6 +728,85 @@ skip them.
 
 ---
 
+## Create Virtual Machines
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_create_vms.sh
+chmod +x gsp_create_vms.sh
+./gsp_create_vms.sh
+```
+
+| # | Checkpoint | Points |
+|---|---|---|
+| 1 | Create a utility virtual machine | 30 |
+| 2 | Create a Windows virtual machine | 30 |
+| 3 | Create a custom virtual machine | 40 |
+
+| Task | What the script does |
+|---|---|
+| 1 | `utility-vm` — shared-core `e2-medium` with **no external IP** — then prints the CPU platform and the availability policies ⏸ |
+| 2 | the two `default-allow-*` firewall rules and their network tags, then `utility-wm` — `e2-standard-2`, Windows Server 2025, 64 GB SSD ⏸ |
+| 3 | `utility-cm` — a **custom** machine type with 2 vCPU and 4 GB — then checks it over SSH ⏸ |
+
+### What "Allow HTTP traffic" actually does
+
+Ticking that box in the console does **two** things, and both are needed:
+
+```bash
+# 1. it creates the rule
+gcloud compute firewall-rules create default-allow-http \
+    --network=default --direction=INGRESS --priority=1000 \
+    --action=ALLOW --rules=tcp:80 --source-ranges=0.0.0.0/0 \
+    --target-tags=http-server
+
+# 2. it tags the instance
+gcloud compute instances create ... --tags=http-server,https-server
+```
+
+The rule without the tag does nothing, and the tag without the rule opens
+nothing. There is a matching `default-allow-https` on tcp:443.
+
+### The Windows image family is looked up, not hardcoded
+
+Google renames the Windows image families between releases, so the script
+resolves the family at run time:
+
+```bash
+gcloud compute images describe-from-family windows-2025 \
+    --project windows-cloud --zone ZONE
+```
+
+and falls back to `windows-2022` and `windows-2019`, then to listing the
+families. Override it with `--windows-family` if you need to.
+
+### Two things the CLI cannot do
+
+**Setting the Windows password.** There is no gcloud command — the lab's
+*Set Windows password* button calls a Windows-specific API. The script
+prints the console path for it.
+
+**Picking a custom machine type in the console.** It becomes
+`--custom-cpu=2 --custom-memory=4GB`, which shows up as the machine type
+`e2-custom-2-4096`.
+
+### Options
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--project ID` | active gcloud project | Target project |
+| `--zone ZONE` | asked for | The lab's zone |
+| `--region REGION` | from the zone | The region |
+| `--image IMAGE` | from the project metadata | The Linux boot disk image family |
+| `--windows-family F` | resolved at run time | The Windows image family |
+| `--task N` | all | Run only task N (1–3) |
+| `--yes` | off | Do not pause for the checkpoints |
+| `--no-verify` | off | Skip the SSH check |
+| `-h, --help` | | Usage |
+
+---
+
+---
+
 ## Cloud Storage and Cloud SQL — Getting Started
 
 ```bash
@@ -895,6 +975,7 @@ gsp_marketplace.sh    # Deploy a LAMP Stack with Google Cloud Marketplace
 gsp_vpc.sh            # Get Started with VPC Networking and Compute Engine
 gsp_vpc_networks.sh    # Create and Configure VPC Networks
 gsp_pga_nat.sh         # Implement Private Google Access and Cloud NAT
+gsp_create_vms.sh      # Create Virtual Machines
 gsp_storagesql.sh     # Getting Started with Cloud Storage and Cloud SQL
 gsp_cloudrun.sh       # Hello Cloud Run
 gsp_console_shell.sh  # Explore the Google Cloud Console and Cloud Shell
@@ -904,6 +985,7 @@ TASKS345.md           # GSP345, task by task, for manual runs
 TASKS_marketplace.md  # Deploy a LAMP Stack with Cloud Marketplace, by hand
 TASKS_vpc_networks.md  # Create and Configure VPC Networks, by hand
 TASKS_pga_nat.md       # Private Google Access and Cloud NAT, by hand
+TASKS_create_vms.md    # Create Virtual Machines, by hand
 TASKS_storagesql.md   # Cloud Storage and Cloud SQL, task by task, for manual runs
 TASKS_cloudrun.md     # Hello Cloud Run, task by task, for manual runs
 TASKS_console_shell.md # Explore the Google Cloud Console and Cloud Shell, by hand
