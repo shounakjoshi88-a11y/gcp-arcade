@@ -11,6 +11,7 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp_vpc.sh`](./gsp_vpc.sh) | **VPC Networking and Compute Engine** | Auto-mode VPC, the four firewall rules, the subnets and the VMs | 100/100 |
 | [`gsp_storagesql.sh`](./gsp_storagesql.sh) | **Cloud Storage and Cloud SQL** — Getting Started | Web server VM, public bucket, Cloud SQL instance, and the PHP page wired to both | 100/100 |
 | [`gsp_cloudrun.sh`](./gsp_cloudrun.sh) | **Hello Cloud Run** | Node.js app, Artifact Registry repo, container image, and the Cloud Run deployment | 100/100 |
+| [`gsp_console_shell.sh`](./gsp_console_shell.sh) | **Explore the Google Cloud Console and Cloud Shell** | The console bucket, the Cloud Shell bucket, the file upload, and the persistent environment variables | — |
 
 *Score* is what the lab console reported after running the script.
 
@@ -595,6 +596,84 @@ revision. Or use the script's own retry:
 
 ---
 
+## Explore the Google Cloud Console and Cloud Shell
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_console_shell.sh
+chmod +x gsp_console_shell.sh
+./gsp_console_shell.sh
+```
+
+| Task | What the script does |
+|---|---|
+| 1 | prints the bucket name and a pre-filled console link, waits for you to create the bucket in the **console**, then verifies it ⏸ |
+| 2 | shows that Cloud Shell is authenticated (no checkpoint, so nothing to click) |
+| 3 | creates the second bucket with `gcloud storage buckets create` ⏸ |
+| 4 | writes a local file and copies it into **both** buckets, then lists the objects ⏸ |
+| 5 | writes `~/infraclass/config`, exports `INFRACLASS_REGION` and `INFRACLASS_PROJECT_ID`, and adds `source "$HOME/infraclass/config"` to `~/.profile` |
+
+It pauses after tasks 1, 3 and 4 so the three checkpoints — *Create a bucket
+using the GCP Console*, *Create a bucket using Cloud Shell*, *Upload a file to
+Storage bucket* — can be claimed.
+
+### Task 1 has to be done in the console
+
+That checkpoint is graded as a **console** creation, so no script can do it
+for you. The script gets as close as it can: it prints the exact name to type
+and a link that opens the create-bucket page already pointed at your project.
+
+```
+  1. Open this link (it is pre-filled with your project):
+       https://console.cloud.google.com/storage/create-bucket?project=PROJECT_ID
+  2. For Name, type exactly:
+       PROJECT_ID
+  3. Leave every other value as it is and click Create.
+  4. If it says Public access will be prevented, click Confirm.
+  5. Come back here and press Enter.
+```
+
+The bucket name has to be globally unique, so if the console says the name is
+taken, pick another one:
+
+```bash
+./gsp_console_shell.sh --console-bucket <name> --cli-bucket <name>-2
+```
+
+### Do not close Cloud Shell while the script is running
+
+The lab's task 2 asks you to close and reopen Cloud Shell. Closing it resets
+the VM and **kills the script**. Task 2 has no checkpoint, so close Cloud
+Shell after the script finishes instead.
+
+### Task 5, verified
+
+The script rewrites `~/infraclass/config` from scratch on every run (so a
+re-run never duplicates a line) and only appends to `~/.profile` if it is not
+already there. It then proves the persistence works:
+
+```bash
+bash -lc 'echo $INFRACLASS_PROJECT_ID'
+```
+
+A **login** shell reads `~/.profile`, so the variable is still set in a fresh
+session. A plain `bash -c` shell does not read `~/.profile` — that is normal,
+not a bug.
+
+### Options
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--project ID` | active gcloud project | Target project |
+| `--console-bucket N` | the project ID | The bucket you create in the console |
+| `--cli-bucket N` | `<console-bucket>-2` | The bucket created from the shell |
+| `--region R` | first region from `gcloud compute regions list` | Stored in `INFRACLASS_REGION` |
+| `--file PATH` | a new `~/my-file.txt` | The file that is uploaded |
+| `--task N` | all | Run only task N (1–5) |
+| `--yes` | off | Do not pause for the checkpoints |
+| `-h, --help` | | Usage |
+
+---
+
 ## Layout
 
 
@@ -607,11 +686,13 @@ gsp_marketplace.sh    # Getting Started with Cloud Marketplace - LAMP stack
 gsp_vpc.sh            # VPC Networking and Compute Engine
 gsp_storagesql.sh     # Getting Started with Cloud Storage and Cloud SQL
 gsp_cloudrun.sh       # Hello Cloud Run
+gsp_console_shell.sh  # Explore the Google Cloud Console and Cloud Shell
 TASKS.md              # GSP321, task by task, for manual runs
 TASKS156.md           # GSP156, task by task, for manual runs
 TASKS345.md           # GSP345, task by task, for manual runs
 TASKS_storagesql.md   # Cloud Storage and Cloud SQL, task by task, for manual runs
 TASKS_cloudrun.md     # Hello Cloud Run, task by task, for manual runs
+TASKS_console_shell.md # Explore the Google Cloud Console and Cloud Shell, by hand
 README.md             # this file
 LICENSE               # MIT
 ```
