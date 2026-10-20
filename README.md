@@ -7,7 +7,7 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp321.sh`](./gsp321.sh) | **GSP321** — Develop Your Google Cloud Network | Dev + prod VPCs, bastion, Cloud SQL, GKE, WordPress, uptime check, IAM | 20/20 |
 | [`gsp156.sh`](./gsp156.sh) | **GSP156** — Terraform Fundamentals | Installs Terraform, writes `instance.tf`, provisions a VM with Terraform | 100/100 |
 | [`gsp345.sh`](./gsp345.sh) | **GSP345** — Build Infrastructure with Terraform (Challenge Lab) | 7 tasks: modules, imports, remote GCS backend, registry module, firewall | 7/7 tasks |
-| [`gsp_marketplace.sh`](./gsp_marketplace.sh) | **Deploy a LAMP Stack with Google Cloud Marketplace** (also *Getting Started with Cloud Marketplace*) | Deploys the LAMP stack (Apache + MySQL + PHP + phpMyAdmin) and verifies the site | passed |
+| [`gsp_marketplace.sh`](./gsp_marketplace.sh) | **Deploy a LAMP Stack with Google Cloud Marketplace** (also *Getting Started with Cloud Marketplace*) | Deploys the LAMP stack (Apache + MySQL + PHP + phpMyAdmin) and verifies the site | 100/100 |
 | [`gsp_vpc.sh`](./gsp_vpc.sh) | **VPC Networking and Compute Engine** | Auto-mode VPC, the four firewall rules, the subnets and the VMs | 100/100 |
 | [`gsp_storagesql.sh`](./gsp_storagesql.sh) | **Cloud Storage and Cloud SQL** — Getting Started | Web server VM, public bucket, Cloud SQL instance, and the PHP page wired to both | 100/100 |
 | [`gsp_cloudrun.sh`](./gsp_cloudrun.sh) | **Hello Cloud Run** | Node.js app, Artifact Registry repo, container image, and the Cloud Run deployment | 100/100 |

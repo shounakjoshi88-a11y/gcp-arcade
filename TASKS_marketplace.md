@@ -36,6 +36,22 @@ Once the software is installed, the details panel shows the **site address**.
 
 Click **Check my progress**.
 
+### The multiple-choice question in task 1
+
+*Which tool is used to deploy Google Cloud Marketplace solutions like the
+LAMP Stack?*
+
+| Option | Answer |
+|---|---|
+| Deployment Manager | **Yes** — Marketplace solutions ship as Cloud Deployment Manager templates |
+| Terraform | No — a separate IaC tool that works, but is not what Marketplace uses |
+| Firestore | No — a NoSQL document database |
+| Template Manager | No — not a Google Cloud product; the templates are hosted *for* Deployment Manager |
+
+The clue is in the lab itself: it asks you to enable the **Infrastructure
+Manager API** next to the Compute Engine API, and the console reports
+`lamp-1 is being deployed` through Deployment Manager.
+
 ### The command line way (what the script does)
 
 The marketplace image is licensed, so it can only be launched from the console
