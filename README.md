@@ -9,6 +9,7 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp345.sh`](./gsp345.sh) | **GSP345** — Build Infrastructure with Terraform (Challenge Lab) | 7 tasks: modules, imports, remote GCS backend, registry module, firewall |
 | [`gsp_marketplace.sh`](./gsp_marketplace.sh) | **Cloud Marketplace** — Getting Started with Cloud Marketplace | Deploys the LAMP stack (Apache + MySQL + PHP + phpMyAdmin) and verifies the site |
 | [`gsp_storagesql.sh`](./gsp_storagesql.sh) | **Cloud Storage and Cloud SQL** — Getting Started | Web server VM, public bucket, Cloud SQL instance, and the PHP page wired to both |
+| [`gsp_cloudrun.sh`](./gsp_cloudrun.sh) | **Hello Cloud Run** | Node.js app, Artifact Registry repo, container image, and the Cloud Run deployment |
 
 Both scripts are **idempotent** — re-run them after any failure and they
 skip whatever already exists. Both exit `0` when every step succeeded and `1`
@@ -497,7 +498,36 @@ assigns it per run.
 
 ---
 
+## Hello Cloud Run
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_cloudrun.sh
+chmod +x gsp_cloudrun.sh
+./gsp_cloudrun.sh
+```
+
+Builds a small Node.js/Express app, containerises it, pushes the image to
+Artifact Registry, and deploys it to Cloud Run.
+
+| Task | What the script does |
+|---|---|
+| 2 | writes `package.json`, `index.js` and the `Dockerfile` |
+| 3 | creates the `my-repository` Artifact Registry repo and points Docker at it |
+| 4 | builds the image with Cloud Build, pushes it, and runs it locally to check it answers |
+| 5 | deploys the `helloworld` service with `--allow-unauthenticated` and checks the URL responds |
+
+It pauses after each task so the three checkpoints — *Create an Artifact
+Registry repository*, *Containerize your app and upload it to Artifact
+Registry*, *Deploy a containerized application on Cloud Run* — can be claimed.
+
+The region is assigned per lab run, so the script asks for it. The base image
+for the `Dockerfile` defaults to `node:20`; pass `--node-image` if your lab
+page names a different one.
+
+---
+
 ## Layout
+
 
 
 ```
@@ -506,6 +536,7 @@ gsp156.sh            # GSP156 - Terraform Fundamentals
 gsp345.sh            # GSP345 - Build Infrastructure with Terraform: Challenge Lab
 gsp_marketplace.sh   # Getting Started with Cloud Marketplace - LAMP stack
 gsp_storagesql.sh  # Getting Started with Cloud Storage and Cloud SQL
+gsp_cloudrun.sh   # Hello Cloud Run
 TASKS.md             # GSP321, task by task, for manual runs
 TASKS156.md          # GSP156, task by task, for manual runs
 TASKS345.md          # GSP345, task by task, for manual runs
