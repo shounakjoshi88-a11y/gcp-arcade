@@ -226,6 +226,42 @@ vm_ip() {  # $1 = external|internal
   fi
 }
 
+# The Cloud SQL admin API. Reads the instance, flips requireSsl off, sets the
+# authorised network, and writes the settings back. Keeps everything else.
+sql_api_patch() {  # $1 = the authorised network value, e.g. 1.2.3.4/32
+  local token payload
+  token="$(gcloud auth print-access-token 2>/dev/null)"
+  if [ -z "$token" ]; then
+    dim "  could not get an access token"
+    return 1
+  fi
+  if ! command -v jq >/dev/null 2>&1; then
+    dim "  jq is not available, cannot build the request"
+    return 1
+  fi
+  payload="$(curl -sS -H "Authorization: Bearer $token" \
+    "https://sqladmin.googleapis.com/sql/v1beta4/projects/$PROJECT_ID/instances/$SQL_NAME" \
+    | jq -c --arg n "web front end" --arg v "$1" \
+      '{settings: (.settings
+         | .ipConfiguration.requireSsl = false
+         | .ipConfiguration.authorizedNetworks = [{"name": $n, "value": $v}])}' 2>/dev/null)"
+  if [ -z "$payload" ]; then
+    dim "  could not read the instance settings"
+    return 1
+  fi
+  local i
+  for i in 1 2 3 4 5; do
+    if curl -sS -X PATCH -H "Authorization: Bearer $token" \
+         -H "Content-Type: application/json" -d "$payload" \
+         "https://sqladmin.googleapis.com/sql/v1beta4/projects/$PROJECT_ID/instances/$SQL_NAME" \
+         2>/dev/null | grep -q '"kind": *"sql#instance"'; then
+      return 0
+    fi
+    sleep 20
+  done
+  return 1
+}
+
 sql_ip() {
   gcloud sql instances describe "$SQL_NAME" --project "$PROJECT_ID" \
     --format="value(ipAddresses[0].ipAddress)" 2>/dev/null
@@ -413,42 +449,36 @@ task4() {
   if sql_exists; then
     ok "$SQL_NAME already exists"
   else
-    # Which flags exist depends on the gcloud version, and a single unknown
-    # flag aborts the whole command. Ask gcloud what it supports instead of
-    # guessing.
-    SQL_HELP="$(gcloud sql instances create --help 2>&1)"
-    sql_flag() { printf '%s' "$SQL_HELP" | grep -qE -- "--$1([^a-z-]|$)"; }
-
-    SQL_ARGS=()
-    sql_flag database-version && SQL_ARGS+=("--database-version=$SQL_VERSION")
-    sql_flag edition        && SQL_ARGS+=("--edition=$SQL_EDITION")
-    sql_flag tier           && SQL_ARGS+=("--tier=$SQL_TIER")
-    sql_flag region         && SQL_ARGS+=("--region=$REGION")
-    sql_flag zone           && SQL_ARGS+=("--zone=$ZONE")
-    sql_flag root-password  && SQL_ARGS+=("--root-password=$SQL_PASSWORD")
-    sql_flag assign-ip      && SQL_ARGS+=("--assign-ip")
-    sql_flag authorized-networks && SQL_ARGS+=("--authorized-networks=$auth_net")
-    sql_flag require-ssl    && SQL_ARGS+=("--no-require-ssl")
-
     info "creating $SQL_NAME (MySQL, $SQL_EDITION, $SQL_TIER) - this takes a few minutes"
-    dim "  flags: ${SQL_ARGS[*]}"
     SQL_LOG="$WORKDIR/sql.log"
-    if gcloud sql instances create "$SQL_NAME" "${SQL_ARGS[@]}" \
-         --project="$PROJECT_ID" --quiet > "$SQL_LOG" 2>&1; then
-      ok "created $SQL_NAME"
-    else
-      # retry without the less common flags, in case one of them is rejected
-      info "retrying with only the core flags"
-      : > "$SQL_LOG"
-      if gcloud sql instances create "$SQL_NAME" \
-           --database-version="$SQL_VERSION" \
-           --region="$REGION" --zone="$ZONE" \
-           --root-password="$SQL_PASSWORD" \
+    gcloud sql instances create --help > "$WORKDIR/sql-help.txt" 2>&1
+
+    # gcloud aborts the whole command if it sees one flag it does not know,
+    # and which flags exist varies by version. Rather than guess, try the full
+    # command and drop whatever it complains about, one flag at a time.
+    SQL_ARGS=(
+      "--database-version=$SQL_VERSION"
+      "--edition=$SQL_EDITION"
+      "--tier=$SQL_TIER"
+      "--region=$REGION"
+      "--zone=$ZONE"
+      "--root-password=$SQL_PASSWORD"
+      "--assign-ip"
+      "--authorized-networks=$auth_net"
+      "--no-require-ssl"
+    )
+    dim "  flags: ${SQL_ARGS[*]}"
+
+    local attempt bad kept a
+    for attempt in 1 2 3 4 5 6 7 8 9; do
+      if gcloud sql instances create "$SQL_NAME" "${SQL_ARGS[@]}" \
            --project="$PROJECT_ID" --quiet > "$SQL_LOG" 2>&1; then
         ok "created $SQL_NAME"
-        warn "some flags were not accepted - the user and the authorised network"
-        warn "are added below instead"
-      else
+        break
+      fi
+      bad="$(grep -oE 'unrecognized arguments: .*' "$SQL_LOG" | head -1 | sed 's/unrecognized arguments: //')"
+      [ -z "$bad" ] && bad="$(grep -oE 'Invalid choice[^.]*' "$SQL_LOG" | head -1)"
+      if [ -z "$bad" ]; then
         note_fail "could not create $SQL_NAME"
         echo ""
         dim "  the error gcloud gave:"
@@ -456,6 +486,28 @@ task4() {
         dim "  the full log is in $SQL_LOG"
         return 1
       fi
+      warn "gcloud rejected: $bad"
+      # gcloud can name more than one bad flag at a time
+      kept=()
+      for a in "${SQL_ARGS[@]}"; do
+        drop=0
+        for b in $bad; do
+          case "$a" in
+            "$b"*) drop=1 ;;
+          esac
+        done
+        [ "$drop" -eq 0 ] && kept+=("$a")
+      done
+      if [ "${#kept[@]}" -eq "${#SQL_ARGS[@]}" ]; then
+        note_fail "could not work out which flag gcloud disliked"
+        head -12 "$SQL_LOG" | sed 's/^/    /'
+        return 1
+      fi
+      SQL_ARGS=("${kept[@]}")
+      dim "  retrying without it: ${SQL_ARGS[*]}"
+    done
+    if [ ! -f "$WORKDIR/.sql_created" ]; then
+      :
     fi
   fi
 
@@ -474,17 +526,20 @@ task4() {
     warn "could not create the user $SQL_USER (it may already exist)"
   fi
 
-  # make sure the authorized network and the SSL setting are what the lab wants
+  # Make sure the authorised network and the SSL setting are what the lab
+  # wants. gcloud has no reliable flag for either on every version, so use
+  # the Cloud SQL admin API directly and keep the rest of the settings.
   info "checking the authorized network and the SSL setting"
   local nets ssl
   nets="$(gcloud sql instances describe "$SQL_NAME" --project="$PROJECT_ID" \
           --format="value(settings.ipConfiguration.authorizedNetworks)" 2>/dev/null)"
   if ! printf '%s' "$nets" | grep -q "$VM_EXT/32"; then
     warn "the authorized network is missing, adding it"
-    gcloud sql instances patch "$SQL_NAME" \
-      --authorized-networks="$auth_net" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 \
-      && ok "added the authorized network" \
-      || warn "could not add the authorized network"
+    if sql_api_patch "$VM_EXT/32"; then
+      ok "added the authorized network $VM_EXT/32"
+    else
+      warn "could not add the authorized network"
+    fi
   else
     ok "the authorized network $VM_EXT/32 is in place"
   fi
@@ -493,10 +548,11 @@ task4() {
         --format="value(settings.ipConfiguration.requireSsl)" 2>/dev/null)"
   if [ "$ssl" = "True" ]; then
     warn "SSL is still required, turning it off"
-    gcloud sql instances patch "$SQL_NAME" --no-require-ssl \
-      --project="$PROJECT_ID" --quiet >/dev/null 2>&1 \
-      && ok "unencrypted network traffic is now allowed" \
-      || warn "could not turn off the SSL requirement"
+    if sql_api_patch "$VM_EXT/32"; then
+      ok "unencrypted network traffic is now allowed"
+    else
+      warn "could not turn off the SSL requirement"
+    fi
   else
     ok "unencrypted network traffic is allowed"
   fi
@@ -547,17 +603,18 @@ EOF
 }
 
 push_index_php() {
-  if gcloud compute scp "$WORKDIR/index.php" "$VM_NAME:/var/www/html/index.php" \
+  # /var/www/html belongs to root, so scp to /tmp and move it into place
+  # with sudo - which is what the lab does with `sudo nano index.php`.
+  if ! gcloud compute scp "$WORKDIR/index.php" "$VM_NAME:/tmp/index.php" \
        --zone="$ZONE" --project="$PROJECT_ID" --quiet >/dev/null 2>&1; then
-    ok "uploaded index.php"
-  else
     note_fail "could not upload index.php"
     return 1
   fi
+  ok "uploaded index.php"
   gcloud compute ssh "$VM_NAME" --zone="$ZONE" --project="$PROJECT_ID" --quiet \
-    --command="sudo chown www-data /var/www/html/index.php 2>/dev/null; sudo service apache2 restart" \
+    --command="sudo mv -f /tmp/index.php /var/www/html/index.php && sudo chmod 644 /var/www/html/index.php && sudo service apache2 restart" \
     >/dev/null 2>&1
-  ok "restarted Apache"
+  ok "moved it into the document root and restarted Apache"
 }
 
 check_page() {  # $1 = what to look for
