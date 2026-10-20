@@ -1,0 +1,626 @@
+#!/usr/bin/env bash
+# =============================================================================
+#  "Google Cloud Fundamentals: Getting Started with Cloud Storage and Cloud SQL"
+#  Google Cloud Arcade / Cloud Skills Boost lab.
+#
+#  Deploys the bloghost web server, a Cloud Storage bucket holding a public
+#  banner image, and a Cloud SQL MySQL instance - then wires the PHP page on
+#  the VM to the database and to the image.
+#
+#  QUICK START (Cloud Shell):
+#     curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_storagesql.sh
+#     chmod +x gsp_storagesql.sh
+#     ./gsp_storagesql.sh
+#
+#  OPTIONS:
+#     --project ID      GCP project (default: active gcloud project)
+#     --zone ZONE       lab zone (asked for if not given)
+#     --region REGION   lab region (derived from the zone)
+#     --location L      bucket multi-region: US, EU or ASIA (derived from the region)
+#     --workdir PATH    where the files are staged (default: $HOME/gsp-storagesql)
+#     --task N          run only task N (2-6)
+#     --yes             do not pause for the checkpoints
+#     -h, --help        this help
+#
+#  NOTES:
+#   * The lab has three checkpoints - the VM, the bucket and the Cloud SQL
+#     instance - and the script pauses after each one so it can be claimed.
+#   * The region and the zone are injected per lab run and cannot be read
+#     from the project, so the script asks for them.
+# =============================================================================
+
+set -uo pipefail
+
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+  C_RESET=$'\033[0m'; C_BOLD=$'\033[1m'; C_DIM=$'\033[2m'
+  C_RED=$'\033[31m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'
+  C_BLUE=$'\033[34m'; C_CYAN=$'\033[36m'
+else
+  C_RESET=""; C_BOLD=""; C_DIM=""; C_RED=""; C_GREEN=""; C_YELLOW=""; C_BLUE=""; C_CYAN=""
+fi
+
+step() { printf "\n%s%s== %s%s\n" "$C_CYAN" "$C_BOLD" "$*" "$C_RESET"; }
+ok()   { printf "  %s[OK]%s   %s\n"   "$C_GREEN"  "$C_RESET" "$*"; }
+warn() { printf "  %s[WARN]%s %s\n" "$C_YELLOW" "$C_RESET" "$*"; }
+err()  { printf "  %s[FAIL]%s %s\n" "$C_RED"    "$C_RESET" "$*"; }
+info() { printf "  %s[INFO]%s %s\n" "$C_BLUE"   "$C_RESET" "$*"; }
+dim()  { printf "  %s%s%s\n"          "$C_DIM"    "$*"       "$C_RESET"; }
+
+FAILURES=0
+note_fail() { err "$1"; FAILURES=$((FAILURES + 1)); }
+
+PROJECT_OVERRIDE=""
+ZONE_OVERRIDE=""
+REGION_OVERRIDE=""
+LOCATION_OVERRIDE=""
+ONLY_TASK=""
+ASSUME_YES=0
+
+VM_NAME="bloghost"
+VM_MACHINE="e2-standard-2"
+SQL_NAME="blog-db"
+SQL_USER="blogdbuser"
+SQL_PASSWORD='Passw0rd1!'
+SQL_TIER="db-f1-micro"
+SQL_EDITION="ENTERPRISE"
+SQL_VERSION="MYSQL_8_0"
+IMAGE_NAME="my-excellent-blog.png"
+IMAGE_SOURCE="gs://cloud-training/gcpfci/my-excellent-blog.png"
+WORKDIR="${GSP_SQL_WORKDIR:-$HOME/gsp-storagesql}"
+
+usage() {
+  cat <<'USAGE_END'
+Google Cloud Fundamentals: Getting Started with Cloud Storage and Cloud SQL
+
+QUICK START (Google Cloud Shell):
+   curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_storagesql.sh
+   chmod +x gsp_storagesql.sh
+   ./gsp_storagesql.sh
+
+OPTIONS:
+   --project ID      GCP project (default: active gcloud project)
+   --zone ZONE       lab zone (asked for if not given)
+   --region REGION   lab region (derived from the zone)
+   --location L      bucket multi-region: US, EU or ASIA (derived from the region)
+   --workdir PATH    where the files are staged (default: $HOME/gsp-storagesql)
+   --task N          run only task N (2-6)
+   --yes             do not pause for the checkpoints
+   -h, --help        this help
+USAGE_END
+  exit 0
+}
+
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --project)  PROJECT_OVERRIDE="$2"; shift 2 ;;
+    --zone)     ZONE_OVERRIDE="$2";     shift 2 ;;
+    --region)   REGION_OVERRIDE="$2";   shift 2 ;;
+    --location) LOCATION_OVERRIDE="$2"; shift 2 ;;
+    --workdir)  WORKDIR="$2";          shift 2 ;;
+    --task)     ONLY_TASK="$2";        shift 2 ;;
+    --yes)      ASSUME_YES=1;          shift ;;
+    -h|--help)  usage ;;
+    *) echo "Unknown option: $1 (try --help)" >&2; exit 2 ;;
+  esac
+done
+
+# ---------------------------------------------------------------------------
+# resolve the project
+# ---------------------------------------------------------------------------
+PROJECT_ID="$PROJECT_OVERRIDE"
+if [ -z "$PROJECT_ID" ]; then
+  PROJECT_ID="$(gcloud config get-value project 2>/dev/null)"
+fi
+if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "(unset)" ]; then
+  PROJECT_ID="${DEVSHELL_PROJECT_ID:-}"
+fi
+if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "(unset)" ]; then
+  err "No GCP project resolved. Pass --project ID"
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
+# ask for the region and the zone, then derive the bucket location
+# ---------------------------------------------------------------------------
+ask_lab_zone() {
+  if [ -n "$ZONE_OVERRIDE" ] && [ -n "$REGION_OVERRIDE" ]; then return 0; fi
+  if [ "$ASSUME_YES" = "1" ] && [ -n "$ZONE_OVERRIDE" ]; then return 0; fi
+
+  local ans def_z def_r
+  def_z="$(gcloud config get-value compute/zone 2>/dev/null)"
+  [ "$def_z" = "(unset)" ] && def_z=""
+  [ -z "$def_z" ] && def_z="us-central1-a"
+  def_r="$(gcloud config get-value compute/region 2>/dev/null)"
+  [ "$def_r" = "(unset)" ] && def_r=""
+  [ -z "$def_r" ] && def_r="${def_z%-*}"
+
+  echo ""
+  warn "the lab assigns the region and the zone per lab run - they cannot be read"
+  dim "  from the project. They are on your lab setup panel (Region / Zone)."
+  dim "  Type them, or paste a zone like us-central1-a and the region fills in too."
+  echo ""
+
+  if [ -n "$ZONE_OVERRIDE" ]; then
+    ZONE="$ZONE_OVERRIDE"
+  else
+    printf "  %sZone%s  [%s]: " "$C_BOLD" "$C_RESET" "$def_z"
+    read -r ans
+    ZONE="${ans:-$def_z}"
+  fi
+  case "$ZONE" in
+    *-*-[a-z]) ZONE1_GIVEN=1 ;;
+  esac
+
+  if [ -n "$REGION_OVERRIDE" ]; then
+    REGION="$REGION_OVERRIDE"
+  else
+    REGION="${ZONE%-*}"
+    [ "$REGION" = "$ZONE" ] && REGION="$def_r"
+  fi
+  echo ""
+}
+
+# the multi-region closest to the lab's region
+derive_location() {
+  case "$1" in
+    us-*)     echo "US" ;;
+    europe-*) echo "EU" ;;
+    asia-*)   echo "ASIA" ;;
+    *)        echo "US" ;;
+  esac
+}
+
+ask_lab_zone
+
+LOCATION="${LOCATION_OVERRIDE:-$(derive_location "$REGION")}"
+
+printf "%s%s  Getting Started with Cloud Storage and Cloud SQL%s\n" "$C_CYAN" "$C_BOLD" "$C_RESET"
+printf "  %sproject=%s  %sregion=%s  %szone=%s  %sbucket location=%s  %sbucket=%s%s\n" \
+  "$C_DIM" "$PROJECT_ID" "$C_DIM" "$REGION" "$C_DIM" "$ZONE" "$C_DIM" "$LOCATION" \
+  "$C_DIM" "$PROJECT_ID" "$C_RESET"
+
+step "Preflight checks"
+
+if ! command -v gcloud >/dev/null 2>&1; then
+  err "gcloud not found on PATH. Run this inside Google Cloud Shell."
+  exit 1
+fi
+ok "gcloud is available"
+
+gcloud config set project "$PROJECT_ID" >/dev/null 2>&1
+ok "project: $PROJECT_ID"
+
+if [ "${CLOUD_SHELL:-}" = "true" ]; then
+  info "running inside Google Cloud Shell"
+else
+  warn "not in Cloud Shell - the zone may be wrong, use --zone"
+fi
+
+info "enabling the Compute Engine, Cloud SQL and Cloud Storage APIs"
+gcloud services enable compute.googleapis.com sqladmin.googleapis.com storage.googleapis.com --quiet >/dev/null 2>&1
+ok "APIs enabled"
+
+mkdir -p "$WORKDIR" || { err "cannot create workdir $WORKDIR"; exit 1; }
+ok "workdir ready: $WORKDIR"
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+vm_exists()    { gcloud compute instances describe "$VM_NAME" --zone "$ZONE" --project "$PROJECT_ID" >/dev/null 2>&1; }
+bucket_exists(){ gcloud storage ls --project "$PROJECT_ID" 2>/dev/null | grep -qx "gs://$PROJECT_ID/"; }
+sql_exists()   { gcloud sql instances describe "$SQL_NAME" --project "$PROJECT_ID" >/dev/null 2>&1; }
+
+vm_ip() {  # $1 = external|internal
+  if [ "$1" = "internal" ]; then
+    gcloud compute instances describe "$VM_NAME" --zone "$ZONE" --project "$PROJECT_ID" \
+      --format="value(networkInterfaces[0].networkIP)" 2>/dev/null
+  else
+    gcloud compute instances describe "$VM_NAME" --zone "$ZONE" --project "$PROJECT_ID" \
+      --format="value(networkInterfaces[0].accessConfigs[0].natIP)" 2>/dev/null
+  fi
+}
+
+sql_ip() {
+  gcloud sql instances describe "$SQL_NAME" --project "$PROJECT_ID" \
+    --format="value(ipAddresses[0].ipAddress)" 2>/dev/null
+}
+
+wait_for_vm() {
+  local i
+  for i in $(seq 1 "${GSP_VM_WAIT:-60}"); do
+    if gcloud compute instances describe "$VM_NAME" --zone "$ZONE" --project "$PROJECT_ID" \
+         --format="value(status)" 2>/dev/null | grep -q "RUNNING"; then
+      return 0
+    fi
+    sleep 5
+  done
+  return 1
+}
+
+wait_for_sql() {
+  local i
+  for i in $(seq 1 "${GSP_SQL_WAIT:-90}"); do
+    if gcloud sql instances describe "$SQL_NAME" --project "$PROJECT_ID" \
+         --format="value(state)" 2>/dev/null | grep -q "RUNNABLE"; then
+      return 0
+    fi
+    sleep 10
+  done
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# Task 2 - the web server VM
+# ---------------------------------------------------------------------------
+task2() {
+  step "Task 2 - Deploy a web server VM instance"
+
+  if vm_exists; then
+    ok "$VM_NAME already exists"
+  else
+    cat > "$WORKDIR/startup.sh" <<'EOF'
+#!/bin/bash
+apt-get install apache2 php php-mysql -y
+service apache2 restart
+EOF
+    info "creating $VM_NAME ($VM_MACHINE, Debian 12) with the startup script"
+    VM_LOG="$WORKDIR/vm.log"
+    if gcloud compute instances create "$VM_NAME" \
+         --zone="$ZONE" --project="$PROJECT_ID" \
+         --machine-type="$VM_MACHINE" \
+         --image-family="debian-12" --image-project="debian-cloud" \
+         --tags="http-server" \
+         --metadata-from-file="startup-script=$WORKDIR/startup.sh" \
+         --quiet > "$VM_LOG" 2>&1; then
+      ok "created $VM_NAME"
+    else
+      note_fail "could not create $VM_NAME"
+      grep -oE '"message": *"[^"]{0,220}' "$VM_LOG" | head -3 | sed 's/^/    /'
+      tail -6 "$VM_LOG" | sed 's/^/    /'
+      return 1
+    fi
+  fi
+
+  info "waiting for $VM_NAME to boot (a couple of minutes)"
+  if wait_for_vm; then
+    ok "$VM_NAME is RUNNING"
+  else
+    warn "$VM_NAME is not running yet"
+  fi
+
+  VM_EXT="$(vm_ip external)"
+  VM_INT="$(vm_ip internal)"
+  if [ -z "$VM_EXT" ] || [ "$VM_EXT" = "None" ]; then
+    note_fail "$VM_NAME has no external IP"
+    return 1
+  fi
+  ok "external IP: $VM_EXT"
+  ok "internal IP: $VM_INT"
+
+  # the lab's "Allow HTTP traffic" tick box
+  if ! gcloud compute firewall-rules describe default-allow-http --project "$PROJECT_ID" >/dev/null 2>&1; then
+    gcloud compute firewall-rules create default-allow-http \
+      --network="default" --allow=tcp:80 --source-ranges="0.0.0.0/0" \
+      --project="$PROJECT_ID" --quiet >/dev/null 2>&1 \
+      && ok "created the default-allow-http firewall rule" \
+      || warn "could not create the default-allow-http firewall rule"
+  else
+    ok "the default-allow-http firewall rule exists"
+  fi
+
+  # wait for apache to come up so the site answers
+  info "waiting for Apache to start serving"
+  for i in $(seq 1 "${GSP_HTTP_WAIT:-30}"); do
+    if curl -s -o /dev/null --max-time 5 "http://$VM_EXT/" 2>/dev/null; then
+      ok "the web server is answering on http://$VM_EXT/"
+      break
+    fi
+    sleep 10
+  done
+}
+
+# ---------------------------------------------------------------------------
+# Task 3 - the Cloud Storage bucket
+# ---------------------------------------------------------------------------
+task3() {
+  step "Task 3 - Create a Cloud Storage bucket"
+
+  if bucket_exists; then
+    ok "the bucket gs://$PROJECT_ID already exists"
+  else
+    info "creating gs://$PROJECT_ID in $LOCATION"
+    B_LOG="$WORKDIR/bucket.log"
+    if gcloud storage buckets create -l "$LOCATION" "gs://$PROJECT_ID" \
+         --project="$PROJECT_ID" > "$B_LOG" 2>&1; then
+      ok "created gs://$PROJECT_ID"
+    else
+      note_fail "could not create the bucket"
+      tail -8 "$B_LOG" | sed 's/^/    /'
+      return 1
+    fi
+  fi
+
+  info "uploading $IMAGE_NAME"
+  gcloud storage cp "$IMAGE_SOURCE" "$WORKDIR/$IMAGE_NAME" --project="$PROJECT_ID" >/dev/null 2>&1
+  if gcloud storage cp "$WORKDIR/$IMAGE_NAME" "gs://$PROJECT_ID/$IMAGE_NAME" \
+       --project="$PROJECT_ID" >/dev/null 2>&1; then
+    ok "uploaded gs://$PROJECT_ID/$IMAGE_NAME"
+  else
+    note_fail "could not upload $IMAGE_NAME"
+    return 1
+  fi
+
+  info "making the object readable by everyone"
+  if gsutil acl ch -u allUsers:R "gs://$PROJECT_ID/$IMAGE_NAME" >/dev/null 2>&1; then
+    ok "the object is public"
+  elif gcloud storage objects update "gs://$PROJECT_ID/$IMAGE_NAME" \
+         --predefined-acl=publicRead --project="$PROJECT_ID" >/dev/null 2>&1; then
+    ok "the object is public"
+  else
+    note_fail "could not make the object public"
+    return 1
+  fi
+
+  IMAGE_URL="https://storage.googleapis.com/$PROJECT_ID/$IMAGE_NAME"
+  ok "image URL: $IMAGE_URL"
+}
+
+# ---------------------------------------------------------------------------
+# Task 4 - the Cloud SQL instance
+# ---------------------------------------------------------------------------
+task4() {
+  step "Task 4 - Create the Cloud SQL instance"
+
+  local auth_net
+  auth_net="web front end=$VM_EXT/32"
+
+  if sql_exists; then
+    ok "$SQL_NAME already exists"
+  else
+    info "creating $SQL_NAME (MySQL, $SQL_EDITION, $SQL_TIER) - this takes a few minutes"
+    SQL_LOG="$WORKDIR/sql.log"
+    # --no-require-ssl so the lab's plain HTTP connection works
+    if gcloud sql instances create "$SQL_NAME" \
+         --database-version="$SQL_VERSION" \
+         --edition="$SQL_EDITION" \
+         --tier="$SQL_TIER" \
+         --region="$REGION" --zone="$ZONE" \
+         --root-password="$SQL_PASSWORD" \
+         --assign-ip \
+         --authorized-networks="$auth_net" \
+         --no-require-ssl \
+         --project="$PROJECT_ID" --quiet > "$SQL_LOG" 2>&1; then
+      ok "created $SQL_NAME"
+    elif gcloud sql instances create "$SQL_NAME" \
+         --database-version="$SQL_VERSION" \
+         --edition="$SQL_EDITION" \
+         --tier="$SQL_TIER" \
+         --region="$REGION" --zone="$ZONE" \
+         --root-password="$SQL_PASSWORD" \
+         --assign-ip \
+         --authorized-networks="$auth_net" \
+         --project="$PROJECT_ID" --quiet > "$SQL_LOG" 2>&1; then
+      ok "created $SQL_NAME"
+      warn "this gcloud has no --no-require-ssl, checking the SSL setting afterwards"
+    else
+      note_fail "could not create $SQL_NAME"
+      grep -oE '"message": *"[^"]{0,220}' "$SQL_LOG" | head -3 | sed 's/^/    /'
+      tail -8 "$SQL_LOG" | sed 's/^/    /'
+      return 1
+    fi
+  fi
+
+  info "waiting for $SQL_NAME to become RUNNABLE"
+  if wait_for_sql; then
+    ok "$SQL_NAME is RUNNABLE"
+  else
+    warn "$SQL_NAME is not RUNNABLE yet"
+  fi
+
+  info "adding the user $SQL_USER"
+  if gcloud sql users create "$SQL_USER" --instance="$SQL_NAME" \
+       --password="$SQL_PASSWORD" --project="$PROJECT_ID" --quiet >/dev/null 2>&1; then
+    ok "created the user $SQL_USER"
+  else
+    warn "could not create the user $SQL_USER (it may already exist)"
+  fi
+
+  # make sure the authorized network and the SSL setting are what the lab wants
+  info "checking the authorized network and the SSL setting"
+  local nets ssl
+  nets="$(gcloud sql instances describe "$SQL_NAME" --project="$PROJECT_ID" \
+          --format="value(settings.ipConfiguration.authorizedNetworks)" 2>/dev/null)"
+  if ! printf '%s' "$nets" | grep -q "$VM_EXT/32"; then
+    warn "the authorized network is missing, adding it"
+    gcloud sql instances patch "$SQL_NAME" \
+      --authorized-networks="$auth_net" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 \
+      && ok "added the authorized network" \
+      || warn "could not add the authorized network"
+  else
+    ok "the authorized network $VM_EXT/32 is in place"
+  fi
+
+  ssl="$(gcloud sql instances describe "$SQL_NAME" --project="$PROJECT_ID" \
+        --format="value(settings.ipConfiguration.requireSsl)" 2>/dev/null)"
+  if [ "$ssl" = "True" ]; then
+    warn "SSL is still required, turning it off"
+    gcloud sql instances patch "$SQL_NAME" --no-require-ssl \
+      --project="$PROJECT_ID" --quiet >/dev/null 2>&1 \
+      && ok "unencrypted network traffic is now allowed" \
+      || warn "could not turn off the SSL requirement"
+  else
+    ok "unencrypted network traffic is allowed"
+  fi
+
+  SQL_EXT="$(sql_ip)"
+  if [ -z "$SQL_EXT" ] || [ "$SQL_EXT" = "None" ]; then
+    note_fail "$SQL_NAME has no public IP"
+    return 1
+  fi
+  ok "public IP: $SQL_EXT"
+}
+
+# ---------------------------------------------------------------------------
+# Tasks 5 and 6 - the PHP page
+# ---------------------------------------------------------------------------
+write_index_php() {  # $1 = with image (1) or without (0)
+  local img=""
+  if [ "$1" = "1" ]; then
+    img=" <img src='$IMAGE_URL'>"
+  fi
+  cat > "$WORKDIR/index.php" <<EOF
+<html>
+<head><title>Welcome to my excellent blog</title></head>
+<body>
+$img
+<h1>Welcome to my excellent blog</h1>
+<?php
+ \$dbserver = "$SQL_EXT";
+\$dbuser = "$SQL_USER";
+\$dbpassword = "$SQL_PASSWORD";
+// In a production blog, we would not store the MySQL
+// password in the document root. Instead, we would store
+//  it in a Secret Manger. For more information see
+// https://cloud.google.com/sql/docs/postgres/use-secret-manager
+
+ try {
+  \$conn = new PDO("mysql:host=\$dbserver;dbname=mysql", \$dbuser, \$dbpassword);
+  // set the PDO error mode to exception
+  \$conn->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+  echo "Connected successfully";
+} catch(PDOException \$e) {
+  echo "Database connection failed:: " . \$e->getMessage();
+}
+
+?>
+</body></html>
+EOF
+}
+
+push_index_php() {
+  if gcloud compute scp "$WORKDIR/index.php" "$VM_NAME:/var/www/html/index.php" \
+       --zone="$ZONE" --project="$PROJECT_ID" --quiet >/dev/null 2>&1; then
+    ok "uploaded index.php"
+  else
+    note_fail "could not upload index.php"
+    return 1
+  fi
+  gcloud compute ssh "$VM_NAME" --zone="$ZONE" --project="$PROJECT_ID" --quiet \
+    --command="sudo chown www-data /var/www/html/index.php 2>/dev/null; sudo service apache2 restart" \
+    >/dev/null 2>&1
+  ok "restarted Apache"
+}
+
+check_page() {  # $1 = what to look for
+  local body
+  for i in $(seq 1 "${GSP_PAGE_WAIT:-12}"); do
+    body="$(curl -s --max-time 10 "http://$VM_EXT/index.php" 2>/dev/null)"
+    if printf '%s' "$body" | grep -q "$1"; then
+      ok "the page says '$1'"
+      return 0
+    fi
+    sleep 5
+  done
+  err "the page does not say '$1'"
+  dim "  the page currently says:"
+  curl -s --max-time 10 "http://$VM_EXT/index.php" 2>/dev/null | sed 's/^/    /' | head -20
+  return 1
+}
+
+task5() {
+  step "Task 5 - Connect the web server to Cloud SQL"
+
+  if [ -z "$SQL_EXT" ]; then
+    SQL_EXT="$(sql_ip)"
+  fi
+  if [ -z "$SQL_EXT" ] || [ "$SQL_EXT" = "None" ]; then
+    err "no Cloud SQL public IP - run task 4 first"
+    return 1
+  fi
+  ok "using the Cloud SQL IP $SQL_EXT"
+
+  write_index_php 0
+  push_index_php
+  check_page "Connected successfully"
+}
+
+task6() {
+  step "Task 6 - Use the Cloud Storage object on the web page"
+
+  if [ -z "$IMAGE_URL" ]; then
+    IMAGE_URL="https://storage.googleapis.com/$PROJECT_ID/$IMAGE_NAME"
+  fi
+  ok "using the image $IMAGE_URL"
+
+  write_index_php 1
+  push_index_php
+
+  if check_page "my-excellent-blog.png"; then
+    ok "the banner image is on the page"
+  fi
+  if check_page "Connected successfully"; then
+    ok "the database is still connected"
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# checkpoint pause
+# ---------------------------------------------------------------------------
+pause_for_check() {  # $1 = task number, $2 = checkpoint name
+  if [ "$ASSUME_YES" -eq 1 ]; then return 0; fi
+  echo ""
+  printf "  %s>>> Task %s applied: %s%s\n" "$C_BOLD" "$1" "$2" "$C_RESET"
+  printf "  %s    Click 'Check my progress' for '%s' in the lab console,%s\n" "$C_DIM" "$2" "$C_RESET"
+  printf "  %s    then press Enter here to continue.%s\n" "$C_DIM" "$C_RESET"
+  printf "  %s    >%s" "$C_YELLOW" "$C_RESET"
+  read -r _
+}
+
+# ---------------------------------------------------------------------------
+# run
+# ---------------------------------------------------------------------------
+case "$ONLY_TASK" in
+  2) task2 ;;
+  3) task3 ;;
+  4) task4 ;;
+  5) task5 ;;
+  6) task6 ;;
+  "")
+    task2
+    pause_for_check 2 "Deploy a web server VM instance"
+    task3
+    pause_for_check 3 "Create a Cloud Storage bucket using the gcloud storage command line"
+    task4
+    pause_for_check 4 "Create the Cloud SQL instance"
+    task5
+    task6
+    ;;
+  *)
+    err "--task must be between 2 and 6"
+    exit 2
+    ;;
+esac
+
+# ---------------------------------------------------------------------------
+# summary
+# ---------------------------------------------------------------------------
+step "Summary"
+echo "  Project  : $PROJECT_ID"
+echo "  Region   : $REGION"
+echo "  Zone     : $ZONE"
+echo "  Bucket   : gs://$PROJECT_ID ($LOCATION)"
+echo "  Image    : $IMAGE_URL"
+echo "  VM       : $VM_NAME ($VM_MACHINE) $VM_EXT"
+echo "  SQL      : $SQL_NAME $SQL_EXT  user $SQL_USER"
+echo "  Site     : http://$VM_EXT/index.php"
+echo ""
+if [ "$FAILURES" -eq 0 ]; then
+  printf "  %sAll steps completed.%s\n" "$C_GREEN" "$C_RESET"
+else
+  printf "  %s%s step(s) reported a failure - see [FAIL] lines above.%s\n" "$C_RED" "$FAILURES" "$C_RESET"
+fi
+echo ""
+dim "  Clean up: cd $WORKDIR && gcloud sql instances delete $SQL_NAME --quiet"
+echo ""
+
+exit "$([ "$FAILURES" -eq 0 ] && echo 0 || echo 1)"

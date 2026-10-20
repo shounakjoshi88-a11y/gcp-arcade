@@ -8,6 +8,7 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp156.sh`](./gsp156.sh) | **GSP156** — Terraform Fundamentals | Installs Terraform, writes `instance.tf`, provisions a VM with Terraform |
 | [`gsp345.sh`](./gsp345.sh) | **GSP345** — Build Infrastructure with Terraform (Challenge Lab) | 7 tasks: modules, imports, remote GCS backend, registry module, firewall |
 | [`gsp_marketplace.sh`](./gsp_marketplace.sh) | **Cloud Marketplace** — Getting Started with Cloud Marketplace | Deploys the LAMP stack (Apache + MySQL + PHP + phpMyAdmin) and verifies the site |
+| [`gsp_storagesql.sh`](./gsp_storagesql.sh) | **Cloud Storage and Cloud SQL** — Getting Started | Web server VM, public bucket, Cloud SQL instance, and the PHP page wired to both |
 
 Both scripts are **idempotent** — re-run them after any failure and they
 skip whatever already exists. Both exit `0` when every step succeeded and `1`
@@ -467,16 +468,48 @@ start answering. The script polls it and tells you the URL either way.
 
 ---
 
+## Cloud Storage and Cloud SQL — Getting Started
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_storagesql.sh
+chmod +x gsp_storagesql.sh
+./gsp_storagesql.sh
+```
+
+Deploys the `bloghost` web server, a Cloud Storage bucket holding a public
+banner image, and a Cloud SQL MySQL instance — then wires the PHP page on the
+VM to the database and to the image, and checks the page really says
+`Connected successfully`.
+
+| Task | What the script does |
+|---|---|
+| 2 — web server VM | `bloghost`, `e2-standard-2`, Debian 12, HTTP firewall, the lab's startup script |
+| 3 — Storage bucket | bucket named after the project, in the multi-region closest to the lab region, the banner image uploaded and made public |
+| 4 — Cloud SQL | `blog-db`, MySQL, Enterprise edition, the `blogdbuser` account, the VM's external IP authorised with `/32`, unencrypted traffic allowed |
+| 5 — PHP to Cloud SQL | writes `index.php` with the database IP and credentials, restarts Apache, checks the page |
+| 6 — image on the page | adds the `<img>` tag pointing at the public object and checks it renders |
+
+It pauses after tasks 2, 3 and 4 so the three checkpoints can be claimed.
+
+The bucket's multi-region is derived from the lab's region (`us-*` → US,
+`europe-*` → EU, `asia-*` → ASIA), and the zone is asked for, since the lab
+assigns it per run.
+
+---
+
 ## Layout
+
 
 ```
 gsp321.sh            # GSP321 - Develop Your Google Cloud Network
 gsp156.sh            # GSP156 - Terraform Fundamentals
 gsp345.sh            # GSP345 - Build Infrastructure with Terraform: Challenge Lab
 gsp_marketplace.sh   # Getting Started with Cloud Marketplace - LAMP stack
+gsp_storagesql.sh  # Getting Started with Cloud Storage and Cloud SQL
 TASKS.md             # GSP321, task by task, for manual runs
 TASKS156.md          # GSP156, task by task, for manual runs
 TASKS345.md          # GSP345, task by task, for manual runs
+TASKS_storagesql.md # Cloud Storage and Cloud SQL, task by task, for manual runs
 README.md            # this file
 ```
 
