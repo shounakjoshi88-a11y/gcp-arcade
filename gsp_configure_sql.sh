@@ -165,14 +165,46 @@ fi
 if [ -z "$PASSWORD_OVERRIDE" ] && [ -f "$WORKDIR/root-password" ]; then
   PASSWORD_OVERRIDE="$(cat "$WORKDIR/root-password")"
 fi
+# Cloud SQL applies a password policy to new instances: at least 8
+# characters, and usually a mix of upper case, lower case, digits and
+# symbols. A short password is rejected by the API with an error that is
+# easy to miss, so it is checked here first.
+password_problems() {
+  local p="$1" out=""
+  [ ${#p} -lt 8 ] && out="at least 8 characters"
+  echo "$p" | grep -q '[A-Z]'  || out="$out, an upper case letter"
+  echo "$p" | grep -q '[a-z]'  || out="$out, a lower case letter"
+  echo "$p" | grep -q '[0-9]'  || out="$out, a digit"
+  echo "$p" | grep -q '[^A-Za-z0-9]' || out="$out, a symbol"
+  echo "$out" | sed 's/^, //'
+}
+
 if [ -z "$PASSWORD_OVERRIDE" ] && [ "$ASSUME_YES" != "1" ]; then
   echo ""
   warn "the lab asks you to choose a root password for the Cloud SQL instance"
   dim "  you will need it for the WordPress setup form later, so pick one you remember"
-  printf "  %sRoot password%s  [Passw0rd1!]: " "$C_BOLD" "$C_RESET"
-  read -r ans
-  PASSWORD_OVERRIDE="${ans:-Passw0rd1!}"
-  echo ""
+  while true; do
+    printf "  %sRoot password%s  [Passw0rd1!]: " "$C_BOLD" "$C_RESET"
+    read -r ans
+    PASSWORD_OVERRIDE="${ans:-Passw0rd1!}"
+    echo ""
+    PROBLEMS="$(password_problems "$PASSWORD_OVERRIDE")"
+    if [ ${#PASSWORD_OVERRIDE} -lt 8 ]; then
+      err "that password is ${#PASSWORD_OVERRIDE} characters - Cloud SQL needs at least 8"
+      continue
+    fi
+    if [ -n "$PROBLEMS" ]; then
+      warn "the Cloud SQL password policy may want: $PROBLEMS"
+      printf "  %sUse it anyway? [y/N]%s " "$C_BOLD" "$C_RESET"
+      read -r go
+      echo ""
+      case "$go" in
+        y|Y|yes|YES) break ;;
+        *) continue ;;
+      esac
+    fi
+    break
+  done
 fi
 PASSWORD="${PASSWORD_OVERRIDE:-Passw0rd1!}"
 printf '%s' "$PASSWORD" > "$WORKDIR/root-password"
@@ -267,7 +299,8 @@ task1() {
       --network=projects/$PROJECT_ID/global/networks/default
       --allocated-ip-range-name=$PSA_RANGE
       --project=$PROJECT_ID"
-    if $CREATE_CMD >/dev/null 2>&1; then
+    CREATE_LOG="$WORKDIR/create.log"
+    if $CREATE_CMD > "$CREATE_LOG" 2>&1; then
       ok "created $INSTANCE"
     elif gcloud sql instances create "$INSTANCE" \
            --database-version="$DB_VERSION" --edition=ENTERPRISE \
@@ -275,11 +308,16 @@ task1() {
            --storage-size=10 --root-password="$PASSWORD" \
            --network="projects/$PROJECT_ID/global/networks/default" \
            --allocated-ip-range-name="$PSA_RANGE" \
-           --project "$PROJECT_ID" >/dev/null 2>&1; then
+           --project "$PROJECT_ID" > "$CREATE_LOG" 2>&1; then
       ok "created $INSTANCE"
     else
       note_fail "could not create $INSTANCE"
-      dim "  run it by hand to see the error:"
+      echo ""
+      dim "  the API said:"
+      grep -iE "error|invalid|policy|password|failed|not ready|denied" "$CREATE_LOG" 2>/dev/null \
+        | head -8 | sed 's/^/    /'
+      dim "  the full log is in $CREATE_LOG"
+      dim "  run it by hand to see everything:"
       dim "    $CREATE_CMD"
       return 1
     fi
@@ -423,8 +461,8 @@ case "$ONLY_TASK" in
   1) task1 ;;
   2) task2 ;;
   "")
-    task1
-    task2
+    task1 || { echo ""; err "task 1 failed - fix that first, everything else depends on it"; exit 1; }
+    task2 || { echo ""; err "task 2 failed"; exit 1; }
     browser_steps
     ;;
   *)

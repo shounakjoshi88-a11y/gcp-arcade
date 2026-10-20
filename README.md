@@ -1142,6 +1142,24 @@ gcloud beta sql instances create wordpress-db \
     --allocated-ip-range-name=default-ip-range
 ```
 
+### The root password has to be 8 characters or more
+
+Cloud SQL puts a password policy on new instances — at least 8 characters,
+and usually a mix of upper case, lower case, digits and symbols. A short
+password is rejected by the API with `INVALID_ARGUMENT: The root password
+does not conform to the password policy`, which is easy to miss because the
+create command prints nothing useful.
+
+The script checks the length **before** it calls the API and asks again if
+the password is too short:
+
+```
+  Root password  [Passw0rd1!]: abc1234
+  [FAIL] that password is 7 characters - Cloud SQL needs at least 8
+```
+
+and if the create still fails, it prints the API's own error and the log path.
+
 ### The proxy gets `nohup`, not a bare `&`
 
 The lab starts it with `./cloud_sql_proxy ... &` from an SSH session, and

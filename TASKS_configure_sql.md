@@ -70,6 +70,18 @@ gcloud beta sql instances create wordpress-db \
 | Enterprise, MySQL 8.0 | `--database-version=MYSQL_8_0` |
 | 1 vCPU, 3.75 GB | `--cpu=1 --memory=3840MB` |
 | 10 GB storage | `--storage-size=10` |
+
+> ### The root password has to satisfy the password policy
+>
+> Cloud SQL applies a password policy to new instances. The default wants
+> **at least 8 characters**, and usually a mix of upper case, lower case,
+> digits and symbols. `abc1234` is 7 characters and the API rejects it with
+> `INVALID_ARGUMENT: The root password does not conform to the password
+> policy`.
+>
+> The script checks the length before it calls the API and asks again if the
+> password is too short, and it prints the API's own error if the create
+> still fails.
 | Private IP, PSA, network `default` | `--network=... --allocated-ip-range-name=...` |
 
 The lab also ticks **Allow unencrypted network traffic**, because WordPress
