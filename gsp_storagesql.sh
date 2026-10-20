@@ -71,8 +71,8 @@ IMAGE_SOURCE="gs://cloud-training/gcpfci/my-excellent-blog.png"
 WORKDIR="${GSP_SQL_WORKDIR:-$HOME/gsp-storagesql}"
 
 # The lab's values, from its setup panel and task text.
-LAB_REGION="us-east1"
-LAB_ZONE="us-east1-b"
+LAB_REGION="us-central1"
+LAB_ZONE="us-central1-c"
 LAB_LOCATION="US"
 
 usage() {
