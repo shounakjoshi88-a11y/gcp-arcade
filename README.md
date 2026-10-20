@@ -11,7 +11,8 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp_vpc.sh`](./gsp_vpc.sh) | **Get Started with Virtual Private Cloud Networking and Compute Engine** | Auto-mode VPC, the four firewall rules, the subnets and the VMs | 100/100 |
 | [`gsp_vpc_networks.sh`](./gsp_vpc_networks.sh) | **Create and Configure VPC Networks** | The auto-mode network and its VMs, plus `managementnet` and `privatenet` in custom mode | 100/100 |
 | [`gsp_pga_nat.sh`](./gsp_pga_nat.sh) | **Implement Private Google Access and Cloud NAT** | A VM with no external IP, an IAP tunnel, Private Google Access and a Cloud NAT gateway | 100/100 |
-| [`gsp_create_vms.sh`](./gsp_create_vms.sh) | **Create Virtual Machines** | The shared-core utility VM, the Windows Server VM and the custom-machine-type VM | — |
+| [`gsp_create_vms.sh`](./gsp_create_vms.sh) | **Create Virtual Machines** | The shared-core utility VM, the Windows Server VM and the custom-machine-type VM | 100/100 |
+| [`gsp_minecraft.sh`](./gsp_minecraft.sh) | **Create and Configure Virtual Machines** | A Minecraft server VM: SSD data disk, static IP, the JRE, the server, firewall, backups and maintenance scripts | — |
 | [`gsp_storagesql.sh`](./gsp_storagesql.sh) | **Cloud Storage and Cloud SQL** — Getting Started | Web server VM, public bucket, Cloud SQL instance, and the PHP page wired to both | 100/100 |
 | [`gsp_cloudrun.sh`](./gsp_cloudrun.sh) | **Hello Cloud Run** | Node.js app, Artifact Registry repo, container image, and the Cloud Run deployment | 100/100 |
 | [`gsp_console_shell.sh`](./gsp_console_shell.sh) | **Explore the Google Cloud Console and Cloud Shell** | The console bucket, the Cloud Shell bucket, the file upload, and the persistent environment variables | — |
@@ -835,6 +836,93 @@ prints the console path for it.
 
 ---
 
+## Create and Configure Virtual Machines
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_minecraft.sh
+chmod +x gsp_minecraft.sh
+./gsp_minecraft.sh
+```
+
+The Minecraft server lab. Five checkpoints, 20 points each.
+
+| # | Checkpoint | What the script does |
+|---|---|---|
+| 1 | Create the VM and prepare the data disk | `mc-server` (e2-medium), the `minecraft-disk` 50 GB pd-ssd, the `mc-server-ip` static IP, then `mkfs.ext4` + `mount` on the VM ⏸ |
+| 2 | Install the JRE and the Minecraft server | `default-jre-headless`, `server.jar` 1.11.2, the EULA, and the server in a detached `screen` session ⏸ |
+| 3 | Allow client traffic | the `minecraft-rule` firewall rule on tcp:25565 ⏸ |
+| 4 | Schedule regular backups | the `<project>-minecraft-backup` bucket, `backup.sh`, one real run, and the `0 */4 * * *` cron job ⏸ |
+| 5 | Server maintenance | the `startup-script-url` and `shutdown-script-url` metadata items ⏸ |
+
+### The three details that decide this lab
+
+**The disk name gives you the mount path.** The lab mounts
+`/dev/disk/by-id/google-minecraft-disk`, and that path is derived from the
+**disk name** — so the disk has to be called `minecraft-disk`, not something
+else.
+
+**The storage scope is not optional.** The backup script runs
+`gcloud storage cp` *on the VM*, so the instance needs
+`devstorage.read_write` in its access scopes. With the default read-only
+scope the backup is denied and the bucket stays empty.
+
+**cron does not read `~/.profile`.** The lab's cron line is
+
+```
+0 */4 * * * /home/minecraft/backup.sh
+```
+
+but `YOUR_BUCKET_NAME` would be empty under cron, and the backup would go to
+a bucket called `-minecraft-backup`. The script therefore writes the
+crontab as:
+
+```
+YOUR_BUCKET_NAME=your-project-id
+0 */4 * * * /home/minecraft/backup.sh
+```
+
+`YOUR_BUCKET_NAME=...` is valid crontab syntax and cron applies it to the
+job below it, so the scheduled backup actually works.
+
+### The steps that run inside the VM
+
+They are uploaded with `gcloud compute scp` and run over **one** SSH
+session, so the environment variables survive from one step to the next:
+
+```bash
+gcloud compute scp prepare_disk.sh mc-server:/tmp
+gcloud compute ssh mc-server --command="bash /tmp/prepare_disk.sh"
+```
+
+The scripts are written to `~/gsp-minecraft/` so you can read exactly what
+ran on the VM.
+
+### About the last task
+
+The lab also stops the VM for maintenance. The script **leaves it running**
+so the earlier checkpoints stay valid, and prints the command to stop it:
+
+```bash
+./gsp_minecraft.sh --stop-vm
+```
+
+### Options
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--project ID` | active gcloud project | Target project |
+| `--zone ZONE` | asked for | The lab's zone |
+| `--region REGION` | from the zone | The region |
+| `--image IMAGE` | from the project metadata | The boot disk image family |
+| `--task N` | all | Run only task N (1–6) |
+| `--yes` | off | Do not pause for the checkpoints |
+| `--stop-vm` | off | Also stop the VM at the end, the way the lab does |
+| `-h, --help` | | Usage |
+
+---
+
+---
+
 ## Cloud Storage and Cloud SQL — Getting Started
 
 ```bash
@@ -1004,6 +1092,7 @@ gsp_vpc.sh            # Get Started with VPC Networking and Compute Engine
 gsp_vpc_networks.sh    # Create and Configure VPC Networks
 gsp_pga_nat.sh         # Implement Private Google Access and Cloud NAT
 gsp_create_vms.sh      # Create Virtual Machines
+gsp_minecraft.sh        # Create and Configure Virtual Machines - Minecraft server
 gsp_storagesql.sh     # Getting Started with Cloud Storage and Cloud SQL
 gsp_cloudrun.sh       # Hello Cloud Run
 gsp_console_shell.sh  # Explore the Google Cloud Console and Cloud Shell
@@ -1014,6 +1103,7 @@ TASKS_marketplace.md  # Deploy a LAMP Stack with Cloud Marketplace, by hand
 TASKS_vpc_networks.md  # Create and Configure VPC Networks, by hand
 TASKS_pga_nat.md       # Private Google Access and Cloud NAT, by hand
 TASKS_create_vms.md    # Create Virtual Machines, by hand
+TASKS_minecraft.md      # Create and Configure Virtual Machines, by hand
 TASKS_storagesql.md   # Cloud Storage and Cloud SQL, task by task, for manual runs
 TASKS_cloudrun.md     # Hello Cloud Run, task by task, for manual runs
 TASKS_console_shell.md # Explore the Google Cloud Console and Cloud Shell, by hand
