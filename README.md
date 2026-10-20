@@ -10,6 +10,7 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp_marketplace.sh`](./gsp_marketplace.sh) | **Deploy a LAMP Stack with Google Cloud Marketplace** (also *Getting Started with Cloud Marketplace*) | Deploys the LAMP stack (Apache + MySQL + PHP + phpMyAdmin) and verifies the site | 100/100 |
 | [`gsp_vpc.sh`](./gsp_vpc.sh) | **Get Started with Virtual Private Cloud Networking and Compute Engine** | Auto-mode VPC, the four firewall rules, the subnets and the VMs | 100/100 |
 | [`gsp_vpc_networks.sh`](./gsp_vpc_networks.sh) | **Create and Configure VPC Networks** | The auto-mode network and its VMs, plus `managementnet` and `privatenet` in custom mode | 100/100 |
+| [`gsp_pga_nat.sh`](./gsp_pga_nat.sh) | **Implement Private Google Access and Cloud NAT** | A VM with no external IP, an IAP tunnel, Private Google Access and a Cloud NAT gateway | — |
 | [`gsp_storagesql.sh`](./gsp_storagesql.sh) | **Cloud Storage and Cloud SQL** — Getting Started | Web server VM, public bucket, Cloud SQL instance, and the PHP page wired to both | 100/100 |
 | [`gsp_cloudrun.sh`](./gsp_cloudrun.sh) | **Hello Cloud Run** | Node.js app, Artifact Registry repo, container image, and the Cloud Run deployment | 100/100 |
 | [`gsp_console_shell.sh`](./gsp_console_shell.sh) | **Explore the Google Cloud Console and Cloud Shell** | The console bucket, the Cloud Shell bucket, the file upload, and the persistent environment variables | — |
@@ -640,6 +641,92 @@ name between labs breaks.
 
 ---
 
+## Implement Private Google Access and Cloud NAT
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_pga_nat.sh
+chmod +x gsp_pga_nat.sh
+./gsp_pga_nat.sh
+```
+
+| # | Checkpoint | Points |
+|---|---|---|
+| 1 | Create the VM instance | 30 |
+| 2 | Create a Cloud Storage bucket and Enable Private Google Access | 40 |
+| 3 | Configure a Cloud NAT gateway | 30 |
+
+| Task | What the script does |
+|---|---|
+| 1 | `privatenet` (custom mode), `privatenet-us` (`10.130.0.0/20`), the `privatenet-allow-ssh` rule limited to the IAP range `35.235.240.0/20`, and `vm-internal` with **no external IP** ⏸ |
+| 2 | the bucket, `access.svg` copied in, and `--enable-private-ip-google-access` on the subnet ⏸ |
+| 3 | the `nat-router` Cloud Router and the `nat-config` Cloud NAT gateway ⏸ |
+| 4 | turns on Cloud NAT logging and prints the Logs Explorer filter |
+
+### The three things that make this lab work
+
+**No external IP.** The CLI spelling of the console's *External IPv4 address:
+None* is `no-address` in the network interface:
+
+```bash
+--network-interface=network=privatenet,subnet=privatenet-us,no-address
+```
+
+**The SSH rule only needs the IAP range.** IAP tunnels always arrive from
+`35.235.240.0/20`, so the rule does not have to open port 22 to the world:
+
+```bash
+gcloud compute firewall-rules create privatenet-allow-ssh \
+    --network=privatenet --rules=tcp:22 --source-ranges=35.235.240.0/20
+```
+
+**Private Google Access is a subnet setting**, not a network setting:
+
+```bash
+gcloud compute networks subnets update privatenet-us \
+    --region=REGION --enable-private-ip-google-access
+```
+
+It only covers Google's own APIs and services. Reaching the wider internet
+is what the **Cloud NAT gateway** is for, and the router and the gateway are
+separate resources with separate names — `nat-router` and `nat-config`.
+
+### The script also verifies the connectivity
+
+After each step it hops into the VM over the IAP tunnel and checks the thing
+the lab asks you to check:
+
+- after Private Google Access: can the VM read the object out of the bucket?
+- after Cloud NAT: does `sudo apt-get update` complete?
+
+Those checks are **informational only** — they never fail the run, because
+they need an IAP tunnel and your account's permissions. Pass `--no-verify` to
+skip them.
+
+> The NAT config takes up to 3 minutes to propagate. If `apt-get update` still
+> fails straight after the script finishes, wait a minute and run it again.
+
+### Options
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--project ID` | active gcloud project | Target project |
+| `--zone ZONE` | asked for | The lab's zone |
+| `--region REGION` | from the zone | The region |
+| `--network NAME` | `privatenet` | The VPC network |
+| `--subnet NAME` | `privatenet-us` | The subnet |
+| `--vm NAME` | `vm-internal` | The instance |
+| `--bucket NAME` | the project ID | The Cloud Storage bucket |
+| `--machine-type T` | `e2-standard-2` | Machine type |
+| `--image IMAGE` | from the project metadata | Boot disk image family |
+| `--task N` | all | Run only task N (1–4) |
+| `--yes` | off | Do not pause for the checkpoints |
+| `--no-verify` | off | Skip the connectivity tests |
+| `-h, --help` | | Usage |
+
+---
+
+---
+
 ## Cloud Storage and Cloud SQL — Getting Started
 
 ```bash
@@ -807,6 +894,7 @@ gsp345.sh             # GSP345 - Build Infrastructure with Terraform: Challenge 
 gsp_marketplace.sh    # Deploy a LAMP Stack with Google Cloud Marketplace
 gsp_vpc.sh            # Get Started with VPC Networking and Compute Engine
 gsp_vpc_networks.sh    # Create and Configure VPC Networks
+gsp_pga_nat.sh         # Implement Private Google Access and Cloud NAT
 gsp_storagesql.sh     # Getting Started with Cloud Storage and Cloud SQL
 gsp_cloudrun.sh       # Hello Cloud Run
 gsp_console_shell.sh  # Explore the Google Cloud Console and Cloud Shell
@@ -815,6 +903,7 @@ TASKS156.md           # GSP156, task by task, for manual runs
 TASKS345.md           # GSP345, task by task, for manual runs
 TASKS_marketplace.md  # Deploy a LAMP Stack with Cloud Marketplace, by hand
 TASKS_vpc_networks.md  # Create and Configure VPC Networks, by hand
+TASKS_pga_nat.md       # Private Google Access and Cloud NAT, by hand
 TASKS_storagesql.md   # Cloud Storage and Cloud SQL, task by task, for manual runs
 TASKS_cloudrun.md     # Hello Cloud Run, task by task, for manual runs
 TASKS_console_shell.md # Explore the Google Cloud Console and Cloud Shell, by hand
