@@ -295,8 +295,10 @@ EOF
       ok "created $VM_NAME"
     else
       note_fail "could not create $VM_NAME"
-      grep -oE '"message": *"[^"]{0,220}' "$VM_LOG" | head -3 | sed 's/^/    /'
-      tail -6 "$VM_LOG" | sed 's/^/    /'
+      echo ""
+      dim "  the error gcloud gave:"
+      head -12 "$VM_LOG" | sed 's/^/    /'
+      dim "  the full log is in $VM_LOG"
       return 1
     fi
   fi
@@ -366,7 +368,10 @@ task3() {
       ok "created gs://$PROJECT_ID"
     else
       note_fail "could not create the bucket"
-      tail -8 "$B_LOG" | sed 's/^/    /'
+      echo ""
+      dim "  the error gcloud gave:"
+      head -12 "$B_LOG" | sed 's/^/    /'
+      dim "  the full log is in $B_LOG"
       return 1
     fi
   fi
@@ -408,36 +413,49 @@ task4() {
   if sql_exists; then
     ok "$SQL_NAME already exists"
   else
+    # Which flags exist depends on the gcloud version, and a single unknown
+    # flag aborts the whole command. Ask gcloud what it supports instead of
+    # guessing.
+    SQL_HELP="$(gcloud sql instances create --help 2>&1)"
+    sql_flag() { printf '%s' "$SQL_HELP" | grep -qE -- "--$1([^a-z-]|$)"; }
+
+    SQL_ARGS=()
+    sql_flag database-version && SQL_ARGS+=("--database-version=$SQL_VERSION")
+    sql_flag edition        && SQL_ARGS+=("--edition=$SQL_EDITION")
+    sql_flag tier           && SQL_ARGS+=("--tier=$SQL_TIER")
+    sql_flag region         && SQL_ARGS+=("--region=$REGION")
+    sql_flag zone           && SQL_ARGS+=("--zone=$ZONE")
+    sql_flag root-password  && SQL_ARGS+=("--root-password=$SQL_PASSWORD")
+    sql_flag assign-ip      && SQL_ARGS+=("--assign-ip")
+    sql_flag authorized-networks && SQL_ARGS+=("--authorized-networks=$auth_net")
+    sql_flag require-ssl    && SQL_ARGS+=("--no-require-ssl")
+
     info "creating $SQL_NAME (MySQL, $SQL_EDITION, $SQL_TIER) - this takes a few minutes"
+    dim "  flags: ${SQL_ARGS[*]}"
     SQL_LOG="$WORKDIR/sql.log"
-    # --no-require-ssl so the lab's plain HTTP connection works
-    if gcloud sql instances create "$SQL_NAME" \
-         --database-version="$SQL_VERSION" \
-         --edition="$SQL_EDITION" \
-         --tier="$SQL_TIER" \
-         --region="$REGION" --zone="$ZONE" \
-         --root-password="$SQL_PASSWORD" \
-         --assign-ip \
-         --authorized-networks="$auth_net" \
-         --no-require-ssl \
+    if gcloud sql instances create "$SQL_NAME" "${SQL_ARGS[@]}" \
          --project="$PROJECT_ID" --quiet > "$SQL_LOG" 2>&1; then
       ok "created $SQL_NAME"
-    elif gcloud sql instances create "$SQL_NAME" \
-         --database-version="$SQL_VERSION" \
-         --edition="$SQL_EDITION" \
-         --tier="$SQL_TIER" \
-         --region="$REGION" --zone="$ZONE" \
-         --root-password="$SQL_PASSWORD" \
-         --assign-ip \
-         --authorized-networks="$auth_net" \
-         --project="$PROJECT_ID" --quiet > "$SQL_LOG" 2>&1; then
-      ok "created $SQL_NAME"
-      warn "this gcloud has no --no-require-ssl, checking the SSL setting afterwards"
     else
-      note_fail "could not create $SQL_NAME"
-      grep -oE '"message": *"[^"]{0,220}' "$SQL_LOG" | head -3 | sed 's/^/    /'
-      tail -8 "$SQL_LOG" | sed 's/^/    /'
-      return 1
+      # retry without the less common flags, in case one of them is rejected
+      info "retrying with only the core flags"
+      : > "$SQL_LOG"
+      if gcloud sql instances create "$SQL_NAME" \
+           --database-version="$SQL_VERSION" \
+           --region="$REGION" --zone="$ZONE" \
+           --root-password="$SQL_PASSWORD" \
+           --project="$PROJECT_ID" --quiet > "$SQL_LOG" 2>&1; then
+        ok "created $SQL_NAME"
+        warn "some flags were not accepted - the user and the authorised network"
+        warn "are added below instead"
+      else
+        note_fail "could not create $SQL_NAME"
+        echo ""
+        dim "  the error gcloud gave:"
+        head -12 "$SQL_LOG" | sed 's/^/    /'
+        dim "  the full log is in $SQL_LOG"
+        return 1
+      fi
     fi
   fi
 
