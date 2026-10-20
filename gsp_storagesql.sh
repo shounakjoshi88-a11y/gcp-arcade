@@ -319,37 +319,30 @@ EOF
     # default set (not cloud-platform), the shielded VM settings and the
     # maintenance policy match, and the instance carries the console's
     # goog-ec-src label.
+    # Keep this close to what the console produces AND to what a run of this
+    # lab that scores needs. The two things that matter most:
+    #   * the startup script, and
+    #   * enable-oslogin=true, without which the lab's SSH step (and the
+    #     check on it) does not work.
+    VM_META="startup-script=$(cat "$WORKDIR/startup.sh"),enable-oslogin=true"
     if gcloud compute instances create "$VM_NAME" \
          --project="$PROJECT_ID" --zone="$ZONE" \
          --machine-type="$VM_MACHINE" \
-         --network-interface="network-tier=PREMIUM,stack-type=IPV4_ONLY,subnet=default" \
-         --metadata-from-file="startup-script=$WORKDIR/startup.sh" \
-         --maintenance-policy="MIGRATE" \
-         --provisioning-model="STANDARD" \
-         --scopes="https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write,https://www.googleapis.com/auth/servicecontrol,https://www.googleapis.com/auth/service.management.readonly,https://www.googleapis.com/auth/trace.append" \
+         --image-family="debian-12" --image-project="debian-cloud" \
+         --metadata="$VM_META" \
          --tags="http-server" \
-         --create-disk="auto-delete=yes,boot=yes,device-name=$VM_NAME,image=projects/debian-cloud/global/images/family/debian-12,mode=rw,size=10,type=projects/$PROJECT_ID/zones/$ZONE/diskTypes/pd-balanced" \
-         --no-shielded-secure-boot --shielded-vtpm --shielded-integrity-monitoring \
-         --labels="goog-ec-src=vm_add-gcloud" \
-         --reservation-affinity="any" \
          --quiet > "$VM_LOG" 2>&1; then
       ok "created $VM_NAME"
     elif gcloud compute instances create "$VM_NAME" \
          --project="$PROJECT_ID" --zone="$ZONE" \
          --machine-type="$VM_MACHINE" \
          --image-family="debian-12" --image-project="debian-cloud" \
-         --boot-disk-type="pd-balanced" --boot-disk-size="10GB" \
-         --network="default" --subnet="default" \
-         --scopes="https://www.googleapis.com/auth/devstorage.read_only,https://www.googleapis.com/auth/logging.write,https://www.googleapis.com/auth/monitoring.write,https://www.googleapis.com/auth/servicecontrol,https://www.googleapis.com/auth/service.management.readonly,https://www.googleapis.com/auth/trace.append" \
+         --metadata="startup-script=$(cat "$WORKDIR/startup.sh")" \
+         --metadata="enable-oslogin=true" \
          --tags="http-server" \
-         --metadata-from-file="startup-script=$WORKDIR/startup.sh" \
-         --maintenance-policy="MIGRATE" \
-         --provisioning-model="STANDARD" \
-         --no-shielded-secure-boot --shielded-vtpm --shielded-integrity-monitoring \
-         --labels="goog-ec-src=vm_add-gcloud" \
          --quiet > "$VM_LOG" 2>&1; then
       ok "created $VM_NAME"
-      warn "fell back to the simpler create command - check the config below"
+      warn "fell back to a simpler create command - check the config below"
     else
       note_fail "could not create $VM_NAME"
       echo ""
@@ -392,10 +385,21 @@ EOF
   echo ""
   info "the instance as it now stands:"
   gcloud compute instances describe "$VM_NAME" --zone="$ZONE" --project="$PROJECT_ID" \
-    --format="table(name,zone,machineType,disks[0].diskTypeGb,disks[0].initializeParams.sourceImage,tags.items,networkInterfaces[0].network,networkInterfaces[0].subnetwork)" \
+    --format="table(name,zone,machineType,tags.items,networkInterfaces[0].network,networkInterfaces[0].subnetwork)" \
     2>/dev/null | sed 's/^/    /'
-  dim "    startup script: $(gcloud compute instances describe "$VM_NAME" --zone="$ZONE" --project="$PROJECT_ID" --format="value(metadata.items)" 2>/dev/null | tr ';' '\n' | grep -A1 startup-script | tail -1 | cut -c1-90)"
-  dim "    firewall: $(gcloud compute firewall-rules describe default-allow-http --project="$PROJECT_ID" --format="value(name,network,sourceRanges,targetTags)" 2>/dev/null | tr ';' ' ')"
+
+  # the image and the disk live on the disk, not on the instance
+  DISK_URL="$(gcloud compute instances describe "$VM_NAME" --zone="$ZONE" \
+    --project="$PROJECT_ID" --format="value(disks[0].source)" 2>/dev/null)"
+  DISK_NAME="$(basename "$DISK_URL")"
+  if [ -n "$DISK_NAME" ]; then
+    dim "    boot disk : $DISK_NAME"
+    dim "    image     : $(gcloud compute disks describe "$DISK_NAME" --zone="$ZONE" --project="$PROJECT_ID" --format="value(sourceImage)" 2>/dev/null)"
+    dim "    disk type : $(gcloud compute disks describe "$DISK_NAME" --zone="$ZONE" --project="$PROJECT_ID" --format="value(type)" 2>/dev/null)"
+    dim "    disk size : $(gcloud compute disks describe "$DISK_NAME" --zone="$ZONE" --project="$PROJECT_ID" --format="value(sizeGb)" 2>/dev/null)GB"
+  fi
+  dim "    metadata  : $(gcloud compute instances describe "$VM_NAME" --zone="$ZONE" --project="$PROJECT_ID" --format="value(metadata.items)" 2>/dev/null | tr ';' '\n' | grep -E 'startup-script|enable-oslogin' | tr '\n' ' ')"
+  dim "    firewall  : $(gcloud compute firewall-rules describe default-allow-http --project="$PROJECT_ID" --format="value(name,network,sourceRanges,targetTags)" 2>/dev/null | tr ';' ' ')"
   echo ""
 
   # wait for apache to come up so the site answers
