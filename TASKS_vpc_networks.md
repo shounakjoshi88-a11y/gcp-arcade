@@ -189,6 +189,22 @@ so only `mynetwork-allow-icmp` covers it. The lab puts it as: *"public access
 to those instances is only controlled by the ICMP firewall rules that you
 established earlier."*
 
+### The second multiple-choice question in task 4
+
+*Which instances should you be able to ping from `mynet-us-vm` using internal
+IP addresses?*
+
+| Option | Answer |
+|---|---|
+| `managementnet-us-vm` | No — it is on the `managementnet` network |
+| `privatenet-us-vm` | No — it is on the `privatenet` network |
+| `mynet-notus-vm` | **Yes** — it is on the same `mynetwork` as `mynet-us-vm` |
+
+`mynet-us-vm` and `mynet-notus-vm` share a VPC network, so the internal ping
+works even though they sit in different zones and regions. The other two are
+on separate networks, and VPC networks are isolated private domains — the
+lab expects **100% packet loss** there.
+
 ## Task 4 — Explore the connectivity across networks
 
 ```bash
