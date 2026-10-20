@@ -167,6 +167,37 @@ ok "compute/region set to $REGION"
 mkdir -p "$APPDIR" || { err "cannot create $APPDIR"; exit 1; }
 ok "workdir ready: $APPDIR"
 
+# Run a command and show its output as it arrives. A first Cloud Run deploy
+# can take several minutes while it pulls the image and creates the revision,
+# and a silent wait looks exactly like a hang.
+run_live() {  # $1 = log file, rest = command
+  local log="$1"; shift
+  local pid last=0 n elapsed=0
+  : > "$log"
+  "$@" > "$log" 2>&1 &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 2
+    elapsed=$((elapsed + 2))
+    n="$(wc -l < "$log" 2>/dev/null | tr -d ' ')"
+    [ -z "$n" ] && n=0
+    if [ "$n" -gt "$last" ]; then
+      tail -n +$((last + 1)) "$log" | sed 's/^/    /'
+      last="$n"
+    elif [ $((elapsed % 30)) -eq 0 ] && [ "$elapsed" -gt 0 ]; then
+      printf "    ... still working (%ss elapsed)\n" "$elapsed"
+    fi
+  done
+  wait "$pid"
+  local rc=$?
+  n="$(wc -l < "$log" 2>/dev/null | tr -d ' ')"
+  [ -z "$n" ] && n=0
+  if [ "$n" -gt "$last" ]; then
+    tail -n +$((last + 1)) "$log" | sed 's/^/    /'
+  fi
+  return $rc
+}
+
 # ---------------------------------------------------------------------------
 # Task 2 - the sample application
 # ---------------------------------------------------------------------------
@@ -274,12 +305,12 @@ task4() {
     ok "the image $IMAGE already exists"
   else
     info "building the image with Cloud Build (a couple of minutes)"
-    if gcloud builds submit --tag "$IMAGE" "$APPDIR" --project="$PROJECT_ID" --quiet >/dev/null 2>&1; then
+    if run_live "$WORKDIR/build.log" \
+         gcloud builds submit --tag "$IMAGE" "$APPDIR" --project="$PROJECT_ID"; then
       ok "built and pushed $IMAGE"
     else
       note_fail "the Cloud Build failed"
-      dim "  run it by hand to see the error:"
-      dim "    gcloud builds submit --tag $IMAGE $APPDIR"
+      dim "  the build log is in $WORKDIR/build.log"
       return 1
     fi
   fi
@@ -320,17 +351,19 @@ task5() {
   if gcloud run services describe "$SERVICE" --region="$LOCATION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     ok "the service $SERVICE already exists"
   else
-    info "deploying (a minute or two)"
-    if gcloud run deploy "$SERVICE" \
+    info "deploying - the first revision pulls the image and can take 3-5 minutes"
+    dim "  you will see gcloud's output below as it happens"
+    if run_live "$WORKDIR/deploy.log" \
+         gcloud run deploy "$SERVICE" \
          --image "$IMAGE" \
          --allow-unauthenticated \
          --region="$LOCATION" \
-         --project="$PROJECT_ID" --quiet >/dev/null 2>&1; then
+         --project="$PROJECT_ID"; then
       ok "deployed $SERVICE"
     else
       note_fail "the deployment failed"
-      dim "  run it by hand to see the error:"
-      dim "    gcloud run deploy $SERVICE --image $IMAGE --allow-unauthenticated --region=$LOCATION"
+      dim "  the deploy log is in $WORKDIR/deploy.log"
+      dim "  to retry just this step:  ./gsp_cloudrun.sh --task 5"
       return 1
     fi
   fi
