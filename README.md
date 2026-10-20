@@ -7,7 +7,7 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp321.sh`](./gsp321.sh) | **GSP321** — Develop Your Google Cloud Network | Dev + prod VPCs, bastion, Cloud SQL, GKE, WordPress, uptime check, IAM | 20/20 |
 | [`gsp156.sh`](./gsp156.sh) | **GSP156** — Terraform Fundamentals | Installs Terraform, writes `instance.tf`, provisions a VM with Terraform | 100/100 |
 | [`gsp345.sh`](./gsp345.sh) | **GSP345** — Build Infrastructure with Terraform (Challenge Lab) | 7 tasks: modules, imports, remote GCS backend, registry module, firewall | 7/7 tasks |
-| [`gsp_marketplace.sh`](./gsp_marketplace.sh) | **Cloud Marketplace** — Getting Started with Cloud Marketplace | Deploys the LAMP stack (Apache + MySQL + PHP + phpMyAdmin) and verifies the site | passed |
+| [`gsp_marketplace.sh`](./gsp_marketplace.sh) | **Deploy a LAMP Stack with Google Cloud Marketplace** (also *Getting Started with Cloud Marketplace*) | Deploys the LAMP stack (Apache + MySQL + PHP + phpMyAdmin) and verifies the site | passed |
 | [`gsp_vpc.sh`](./gsp_vpc.sh) | **VPC Networking and Compute Engine** | Auto-mode VPC, the four firewall rules, the subnets and the VMs | 100/100 |
 | [`gsp_storagesql.sh`](./gsp_storagesql.sh) | **Cloud Storage and Cloud SQL** — Getting Started | Web server VM, public bucket, Cloud SQL instance, and the PHP page wired to both | 100/100 |
 | [`gsp_cloudrun.sh`](./gsp_cloudrun.sh) | **Hello Cloud Run** | Node.js app, Artifact Registry repo, container image, and the Cloud Run deployment | 100/100 |
@@ -416,7 +416,7 @@ lab, then imported as normal.
 
 ---
 
-## Cloud Marketplace - Getting Started with Cloud Marketplace
+## Deploy a LAMP Stack with Google Cloud Marketplace
 
 ```bash
 curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_marketplace.sh
@@ -426,6 +426,17 @@ chmod +x gsp_marketplace.sh
 
 Deploys the LAMP stack - Linux, Apache HTTP Server, MySQL, PHP and phpMyAdmin
 - and then verifies the site.
+
+This one script covers both labs, because they are the same lab:
+
+| Lab | Focus |
+|---|---|
+| Deploy a LAMP Stack with Google Cloud Marketplace | 19092 |
+| Google Cloud Fundamentals: Getting Started with Cloud Marketplace | 19063 |
+
+Both have the single checkpoint **Use Cloud Marketplace to deploy a LAMP
+stack**, and the deployment has to be named `lamp-1` with an `e2-medium`
+instance in the lab's zone.
 
 ### What the console does, and what this does
 
@@ -470,6 +481,28 @@ and prints the site address.
 
 The LAMP software installs during boot, so the site takes a few minutes to
 start answering. The script polls it and tells you the URL either way.
+
+### Getting the zone right
+
+The zone is lab-assigned and it **is** graded, so the script asks for it and
+shows you where its suggestion came from:
+
+```
+  suggested: europe-west4-b   (from the project metadata)
+```
+
+It reads the zone back out of the project's startup-script metadata, which
+the lab fills in for you. That beats a hardcoded zone from a previous lab
+run. If the suggestion does not match your setup panel, type the right one
+in — the prompt takes it.
+
+The script also prints what it settled on:
+
+```
+  zone: europe-west4-b   region: europe-west4   (from the default zone (the project metadata))
+  Your lab setup panel should say:  Region europe-west4   Zone europe-west4-b
+  If they differ, re-run with:  ./gsp_marketplace.sh --zone <zone> --region <region>
+```
 
 ---
 
@@ -682,7 +715,7 @@ not a bug.
 gsp321.sh             # GSP321 - Develop Your Google Cloud Network
 gsp156.sh             # GSP156 - Terraform Fundamentals
 gsp345.sh             # GSP345 - Build Infrastructure with Terraform: Challenge Lab
-gsp_marketplace.sh    # Getting Started with Cloud Marketplace - LAMP stack
+gsp_marketplace.sh    # Deploy a LAMP Stack with Google Cloud Marketplace
 gsp_vpc.sh            # VPC Networking and Compute Engine
 gsp_storagesql.sh     # Getting Started with Cloud Storage and Cloud SQL
 gsp_cloudrun.sh       # Hello Cloud Run
@@ -690,6 +723,7 @@ gsp_console_shell.sh  # Explore the Google Cloud Console and Cloud Shell
 TASKS.md              # GSP321, task by task, for manual runs
 TASKS156.md           # GSP156, task by task, for manual runs
 TASKS345.md           # GSP345, task by task, for manual runs
+TASKS_marketplace.md  # Deploy a LAMP Stack with Cloud Marketplace, by hand
 TASKS_storagesql.md   # Cloud Storage and Cloud SQL, task by task, for manual runs
 TASKS_cloudrun.md     # Hello Cloud Run, task by task, for manual runs
 TASKS_console_shell.md # Explore the Google Cloud Console and Cloud Shell, by hand

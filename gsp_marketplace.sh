@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  GSP - "Google Cloud Fundamentals: Getting Started with Cloud Marketplace"
+#  GSP - "Deploy a LAMP Stack with Google Cloud Marketplace"
+#         (also listed as "Google Cloud Fundamentals: Getting Started with
+#          Cloud Marketplace" - the two labs have identical steps and the
+#          identical checkpoint "Use Cloud Marketplace to deploy a LAMP stack")
+#
 #  Deploys the LAMP stack (Linux, Apache, MySQL, PHP, phpMyAdmin) with
 #  Deployment Manager, the same way the Cloud Marketplace "LAMP Stack by
 #  Google Click to Deploy" solution does, then verifies the site.
@@ -74,7 +78,7 @@ LAB_ZONE="asia-east1-a"
 
 usage() {
   cat <<'USAGE_END'
-GSP - Getting Started with Cloud Marketplace (LAMP stack)
+GSP - Deploy a LAMP Stack with Google Cloud Marketplace (LAMP stack)
 
 QUICK START (Google Cloud Shell):
    curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_marketplace.sh
@@ -132,14 +136,48 @@ GCP_REGION="$(gcloud config get-value compute/region 2>/dev/null)"
 [ "$GCP_ZONE" = "(unset)" ] && GCP_ZONE=""
 [ "$GCP_REGION" = "(unset)" ] && GCP_REGION=""
 
+zone_exists() {
+  gcloud compute zones describe "$1" --project "$PROJECT_ID" >/dev/null 2>&1
+}
+
+# The lab injects its zone into the project metadata, so read it back from
+# there. It is only a suggestion - the setup panel is the authority - but it
+# beats a hardcoded zone that belonged to a previous lab run.
+detect_zone_from_metadata() {
+  local z
+  z="$(gcloud compute project-info describe --project "$PROJECT_ID" \
+        --format="value(commonInstanceMetadata.items)" 2>/dev/null \
+        | grep -oE '\b[a-z]+-[a-z]+[0-9]-[a-z]\b' | head -1)"
+  if [ -n "$z" ] && zone_exists "$z"; then
+    echo "$z"
+    return 0
+  fi
+  return 1
+}
+
 # The lab assigns the zone per lab run and it cannot be read from the
 # project, so ask for it. Accepts a zone like asia-east1-a.
 ask_lab_zone() {
   if [ -n "$ZONE_OVERRIDE" ] || [ "${ASSUME_YES:-0}" = "1" ]; then return 0; fi
-  local ans def="${LAB_ZONE:-${GCP_ZONE:-us-central1-b}}"
+  local ans def src
+  ZONE_DEF=""
+  ZONE_DEF_SRC=""
+  def="$(detect_zone_from_metadata || true)"
+  if [ -n "$def" ]; then
+    src="the project metadata"
+  elif [ -n "$LAB_ZONE" ]; then
+    def="$LAB_ZONE"
+    src="this lab's default zone"
+  else
+    def="${GCP_ZONE:-us-central1-b}"
+    src="gcloud config compute/zone"
+  fi
+  ZONE_DEF="$def"
+  ZONE_DEF_SRC="$src"
   echo ""
   warn "the lab assigns the zone per lab run - it cannot be read from the project"
   dim "  it is on your lab setup panel (Zone). Type it, or paste one like asia-east1-a."
+  dim "  suggested: $def   (from $src)"
   printf "  %sZone%s  [%s]: " "$C_BOLD" "$C_RESET" "$def"
   read -r ans
   ZONE_OVERRIDE="${ans:-$def}"
@@ -152,7 +190,13 @@ ask_lab_zone
 if [ -n "$ZONE_OVERRIDE" ]; then
   ZONE="$ZONE_OVERRIDE"
   ZONE_SOURCE="the --zone flag"
-  [ "$ZONE_FROM_USER" = "1" ] && ZONE_SOURCE="the value you entered"
+  if [ "$ZONE_FROM_USER" = "1" ]; then
+    if [ "$ZONE_OVERRIDE" = "${ZONE_DEF:-}" ]; then
+      ZONE_SOURCE="the default zone (${ZONE_DEF_SRC:-the metadata})"
+    else
+      ZONE_SOURCE="the value you entered"
+    fi
+  fi
 elif [ -n "$LAB_ZONE" ]; then
   ZONE="$LAB_ZONE"
   ZONE_SOURCE="this lab's default zone"
@@ -172,7 +216,7 @@ else
   REGION="${GCP_REGION:-${CLOUDSDK_COMPUTE_REGION:-${ZONE%-*}}}"
 fi
 
-printf "%s%s  Getting Started with Cloud Marketplace - LAMP stack%s\n" "$C_CYAN" "$C_BOLD" "$C_RESET"
+printf "%s%s  Deploy a LAMP Stack with Google Cloud Marketplace%s\n" "$C_CYAN" "$C_BOLD" "$C_RESET"
 printf "  %sproject=%s  %szone=%s  %sregion=%s  %sdeployment=%s  %stype=%s  %simage=%s%s\n" \
   "$C_DIM" "$PROJECT_ID" "$C_DIM" "$ZONE" "$C_DIM" "$REGION" "$C_DIM" "$DEPLOYMENT" \
   "$C_DIM" "$MACHINE_TYPE" "$C_DIM" "$IMAGE" "$C_RESET"
@@ -510,6 +554,7 @@ else
 fi
 echo ""
 echo "  Click 'Check my progress' for 'Use Cloud Marketplace to deploy a LAMP stack'."
+  echo "  (the checkpoint is spelled the same in both Marketplace labs)."
 echo ""
 dim "  If the lab still wants the marketplace image itself, deploy it in the console:"
 dim "    Marketplace -> search LAMP -> 'LAMP Stack, by Google Click to Deploy'"
