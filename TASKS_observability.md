@@ -22,6 +22,33 @@ The four checkpoints are:
 
 ---
 
+## The knowledge-check questions, and their answers
+
+| Question | Answer |
+|---|---|
+| Why is monitoring important to Google? | **It is at the base of site reliability which incorporates aspects of software engineering and applies that to operations whose goals are to create ultra-scalable and highly reliable software systems.** |
+| Which strategy effectively reduces alert fatigue? | **Customize your alerts to the audience need**, **use multiple notification channels so you avoid a single point of failure**, and **configure alerting on symptoms and not necessarily causes**. Never *report all noise to ensure all data points are presented* — that is the one that causes fatigue. |
+| Select all valid targets for Cloud Monitoring uptime alert notifications. | **webhook**, **email**, **Pub/sub**, **3rd party service** and **SMS**. Not *EC2 service* — that is a resource type, not a notification target. |
+
+The third one matches the Cloud Monitoring API exactly. The channel types it
+accepts are:
+
+```bash
+gcloud beta monitoring channel-descriptors list --format='value(type)'
+# campfire, email, google_chat, hipchat, pagerduty, pubsub, slack, sms,
+# webhook_basicauth, webhook_tokenauth
+```
+
+**EC2 service** is not on that list, which is what makes it the odd one out.
+
+> The lab's own source asks the alert-fatigue question the other way round —
+> *"What is **not** a recommended best practice for alerts?"* — and marks
+> *Report all noise to ensure all data points are presented*. The positive
+> form flips the pick to the other three. Both forms agree that reporting all
+> the noise is the wrong answer.
+
+---
+
 ## Task 1 — Verify the resources
 
 ```bash
