@@ -1142,6 +1142,14 @@ gcloud beta sql instances create wordpress-db \
     --allocated-ip-range-name=default-ip-range
 ```
 
+### The patch restarts the instance, and it shows you why
+
+`gcloud sql instances patch` also waits for a long-running operation, because
+changing the SSL setting **restarts** the instance. The script streams that
+too, and — importantly — it **only patches when something actually needs
+changing**. A second run leaves the instance alone instead of restarting it
+for nothing.
+
 ### The create takes minutes, and it shows you why
 
 `gcloud sql instances create` blocks for the whole long-running operation, and

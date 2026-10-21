@@ -131,6 +131,22 @@ PROXY_IP=$(gcloud compute instances describe wordpress-proxy --zone=$ZONE \
 gcloud sql instances patch wordpress-db --authorized-networks="$PROXY_IP/32"
 ```
 
+> **The patch restarts the instance, and gcloud waits for the whole thing.**
+> That is another few minutes of silence. The script streams the patch's
+> output, and it only patches when something actually needs changing — a
+> second run leaves the instance alone instead of restarting it for nothing.
+>
+> If `--no-require-ssl` is not recognised by your gcloud version, the
+> instance needs the same setting through the API:
+>
+> ```bash
+> TOKEN=$(gcloud auth print-access-token)
+> curl -s -X PATCH "https://sqladmin.googleapis.com/sql/v1beta4/projects/$PROJECT_ID/instances/wordpress-db" \
+>   -H "Authorization: Bearer $TOKEN" \
+>   -H "Content-Type: application/json" \
+>   -d '{"settings":{"ipConfiguration":{"requireSsl":false}}}'
+> ```
+
 > `--authorized-networks` wants a bare `IP/32`. A `name=IP/32` value fails on
 > `patch`.
 

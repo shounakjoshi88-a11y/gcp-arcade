@@ -399,6 +399,8 @@ task1() {
     fi
   fi
 
+  TOKEN="$(gcloud auth print-access-token 2>/dev/null)"
+
   info "waiting for the instance to be ready"
   local i last_state=""
   for i in $(seq 1 120); do
@@ -428,14 +430,56 @@ task1() {
   # The lab allows unencrypted traffic, because WordPress talks to the
   # database over plain MySQL. The proxy VM connects over the public IP, so
   # its address has to be allowlisted too.
+  #
+  # Patching a Cloud SQL instance restarts it, and gcloud waits for that
+  # whole operation, so the patch is only run when something actually needs
+  # changing, and its output is streamed while it happens.
   PROXY_IP="$(vm_ext_ip "$PROXY_VM" "$PROXY_ZONE")"
   if [ -n "$PROXY_IP" ] && [ "$PROXY_IP" != "None" ]; then
-    info "allowlisting the proxy VM $PROXY_VM ($PROXY_IP)"
-    gcloud sql instances patch "$INSTANCE" --project "$PROJECT_ID" \
-      --authorized-networks="$PROXY_IP/32" --no-require-ssl \
-      >/dev/null 2>&1 \
-      && ok "the proxy VM is allowlisted and unencrypted traffic is allowed" \
-      || warn "could not patch the instance - it may already be set"
+    NEED_PATCH=0
+    if [ -n "$TOKEN" ]; then
+      API_JSON="$(curl -s "https://sqladmin.googleapis.com/sql/v1beta4/projects/$PROJECT_ID/instances/$INSTANCE" \
+                   -H "Authorization: Bearer $TOKEN" 2>/dev/null)"
+      case "$API_JSON" in
+        *'"requireSsl": true'*) NEED_PATCH=1 ;;
+      esac
+      case "$API_JSON" in
+        *"$PROXY_IP"*) ;;
+        *) NEED_PATCH=1 ;;
+      esac
+    else
+      NEED_PATCH=1
+    fi
+
+    if [ "$NEED_PATCH" = "1" ]; then
+      info "allowlisting the proxy VM $PROXY_VM ($PROXY_IP) and allowing unencrypted traffic"
+      dim "  this restarts the instance, so it takes a few minutes"
+      PATCH_LOG="$WORKDIR/patch.log"
+      if run_live "$PATCH_LOG" timeout 900 gcloud sql instances patch "$INSTANCE" \
+           --project "$PROJECT_ID" \
+           --authorized-networks="$PROXY_IP/32" --no-require-ssl; then
+        ok "the proxy VM is allowlisted and unencrypted traffic is allowed"
+        info "waiting for the instance to come back up"
+        local j
+        for j in $(seq 1 60); do
+          PSTATE="$(gcloud sql instances describe "$INSTANCE" --project "$PROJECT_ID" \
+                     --format="value(state)" 2>/dev/null)"
+          case "$PSTATE" in
+            RUNNABLE) ok "$INSTANCE is RUNNABLE again"; break ;;
+          esac
+          if [ $((j % 3)) -eq 0 ]; then
+            printf "    ... restarting (%s of 60 checks, state %s)\n" "$j" "${PSTATE:-unknown}"
+          fi
+          sleep 10
+        done
+      else
+        warn "could not patch the instance - it may already be set"
+        dim "  the API said:"
+        head -4 "$PATCH_LOG" 2>/dev/null | sed 's/^/    /'
+      fi
+    else
+      ok "the instance is already allowlisted and allows unencrypted traffic"
+    fi
   else
     warn "the proxy VM has no external IP yet"
   fi
