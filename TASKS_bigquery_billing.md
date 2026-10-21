@@ -80,6 +80,24 @@ Click **Check my progress** — *Compose a simple query*.
 > The project ID is optional in a table reference — BigQuery defaults to the
 > current project — so `billing_dataset.sampleinfotable` is enough.
 
+## The embedded questions, and their answers
+
+The lab has six knowledge checks. These are the answers, taken from the
+billing export the lab ships — the data is fixed, so the numbers are fixed.
+
+| Question | Answer |
+|---|---|
+| What is the total number of rows in the table? | **415,602** |
+| How many rows had cost greater than 0? | **70,765 rows** |
+| Which product had the most billing records? | **Compute Engine** — 281,136 records |
+| Which product had the most billing records of over $1? | **Cloud Storage** — 17 charges |
+| What was the most commonly charged unit of measure? | **Byte-seconds** |
+| Which product has the highest total cost? | **Compute Engine** — $2,548.77 |
+
+The other two totals, for reference: Cloud Storage $40.05 and BigQuery $910.73.
+Cloud SQL has 10,271 records and BigQuery 39,498 — both far behind Compute
+Engine's 281,136.
+
 ## Task 4 — Analyze a large billing dataset with SQL
 
 Run each of these. The table has **415,602** rows.
