@@ -1142,6 +1142,23 @@ gcloud beta sql instances create wordpress-db \
     --allocated-ip-range-name=default-ip-range
 ```
 
+### The create takes minutes, and it shows you why
+
+`gcloud sql instances create` blocks for the whole long-running operation, and
+an instance with a private IP commonly takes 3–8 minutes to come up. The
+script prints gcloud's output as it arrives and then heartbeats while it
+waits for the instance to report `RUNNABLE`:
+
+```
+  attempt 1: gcloud beta sql instances create wordpress-db ...
+    Waiting for operation
+    ... still working (20s elapsed)
+  [OK]   created wordpress-db (attempt 1)
+    state: RUNNABLE
+```
+
+A silent wait is indistinguishable from a hang, so there isn't one.
+
 ### The create command is tried a few ways
 
 The private IP flags (`--network`, `--allocated-ip-range-name`) only exist on

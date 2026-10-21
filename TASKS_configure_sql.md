@@ -134,6 +134,13 @@ gcloud sql instances patch wordpress-db --authorized-networks="$PROXY_IP/32"
 > `--authorized-networks` wants a bare `IP/32`. A `name=IP/32` value fails on
 > `patch`.
 
+> **The create takes several minutes and that is normal.** `gcloud sql
+> instances create` waits for the long-running operation to finish, and a
+> Cloud SQL instance with a private IP typically takes 3–8 minutes to come up.
+> Watch the progress rather than assuming it has hung — the script prints
+> gcloud's output as it arrives, plus a heartbeat while it waits for the
+> instance to report `RUNNABLE`.
+
 Click **Check my progress** — *Create a Cloud SQL instance*.
 
 ## Task 3 — Configure a proxy on a virtual machine

@@ -228,6 +228,37 @@ vm_ext_ip() {  # $1 = vm name, $2 = zone
     --format="value(networkInterfaces[0].accessConfigs[0].natIP)" 2>/dev/null
 }
 
+# Run a command and show its output as it arrives. Creating a Cloud SQL
+# instance blocks for several minutes while the operation runs, and a silent
+# wait looks exactly like a hang.
+run_live() {  # $1 = log file, rest = command
+  local log="$1"; shift
+  local pid last=0 n elapsed=0
+  : > "$log"
+  "$@" > "$log" 2>&1 &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 2
+    elapsed=$((elapsed + 2))
+    n="$(wc -l < "$log" 2>/dev/null | tr -d ' ')"
+    [ -z "$n" ] && n=0
+    if [ "$n" -gt "$last" ]; then
+      tail -n +$((last + 1)) "$log" | sed 's/^/    /'
+      last="$n"
+    elif [ $((elapsed % 20)) -eq 0 ]; then
+      printf "    ... still working (%ss elapsed)\n" "$elapsed"
+    fi
+  done
+  wait "$pid"
+  local rc=$?
+  n="$(wc -l < "$log" 2>/dev/null | tr -d ' ')"
+  [ -z "$n" ] && n=0
+  if [ "$n" -gt "$last" ]; then
+    tail -n +$((last + 1)) "$log" | sed 's/^/    /'
+  fi
+  return $rc
+}
+
 pause_for_check() {  # $1 = task number, $2 = checkpoint name
   if [ "$ASSUME_YES" = "1" ]; then return 0; fi
   echo ""
@@ -309,7 +340,8 @@ task1() {
     for CREATE_CMD in "${ATTEMPTS[@]}"; do
       n=$((n + 1))
       CREATE_LOG="$WORKDIR/create-$n.log"
-      if $CREATE_CMD > "$CREATE_LOG" 2>&1; then
+      dim "  attempt $n: $CREATE_CMD"
+      if run_live "$CREATE_LOG" $CREATE_CMD; then
         ok "created $INSTANCE (attempt $n)"
         CREATE_LOG=""
         break
@@ -368,12 +400,27 @@ task1() {
   fi
 
   info "waiting for the instance to be ready"
-  local i
-  for i in $(seq 1 60); do
-    if gcloud sql instances describe "$INSTANCE" --project "$PROJECT_ID" \
-         --format="value(state)" 2>/dev/null | grep -q "RUNNABLE"; then
-      ok "$INSTANCE is RUNNABLE"
-      break
+  local i last_state=""
+  for i in $(seq 1 120); do
+    STATE="$(gcloud sql instances describe "$INSTANCE" --project "$PROJECT_ID" \
+               --format="value(state)" 2>/dev/null)"
+    if [ -z "$STATE" ]; then
+      # not every gcloud build exposes the state field
+      STATE="$(gcloud sql instances describe "$INSTANCE" --project "$PROJECT_ID" \
+                 --format="json" 2>/dev/null \
+                 | grep -oE '"state": "[A-Z]+"' | head -1 | grep -oE '[A-Z]+"$' | tr -d '"')"
+    fi
+    if [ "$STATE" != "$last_state" ]; then
+      dim "    state: ${STATE:-starting up}"
+      last_state="$STATE"
+    fi
+    case "$STATE" in
+      RUNNABLE) ok "$INSTANCE is RUNNABLE"; break ;;
+      SUSPENDED|DELETED|FAILED)
+        note_fail "the instance went to $STATE"; break ;;
+    esac
+    if [ $((i % 3)) -eq 0 ]; then
+      printf "    ... still starting (%s of 120 checks)\n" "$i"
     fi
     sleep 10
   done
