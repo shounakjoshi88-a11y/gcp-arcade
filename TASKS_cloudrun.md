@@ -148,5 +148,4 @@ new revision.
 gcloud run services delete helloworld --region=$LOCATION --quiet
 gcloud artifacts repositories delete my-repository --quiet
 gcloud container images delete \
-    $LOCATION-docker.pkg.dev/$PROJECT_ID/my-repository/helloworld --quiet
-```
+    $LOCATION-docker.pkg.dev/$PROJECT_ID/my-repository/hel

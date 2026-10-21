@@ -193,5 +193,4 @@ gcloud alpha monitoring policies delete POLICY_NAME
 gcloud beta monitoring channels delete CHANNEL_NAME
 gcloud monitoring dashboards delete DASHBOARD_NAME
 curl -s -X DELETE -H "Authorization: Bearer $TOKEN" \
-  "https://monitoring.googleapis.com/v3/projects/$PROJECT_ID/groups/GROUP_NAME"
-```
+  "https://monitoring.googleapis.com/v3/projects/$PROJECT_ID/gro

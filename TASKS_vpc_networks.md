@@ -231,5 +231,4 @@ VPC peering or a VPN.
 gcloud compute instances delete mynet-us-vm managementnet-us-vm privatenet-us-vm \
     --zone=ZONE_1 --quiet
 gcloud compute instances delete mynet-notus-vm --zone=ZONE_2 --quiet
-gcloud compute networks delete mynetwork managementnet privatenet --quiet
-```
+gcloud compute networks delete mynet

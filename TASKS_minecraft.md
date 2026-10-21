@@ -259,5 +259,4 @@ gcloud compute instances delete mc-server --zone=ZONE --quiet
 gcloud compute disks delete minecraft-disk --zone=ZONE --quiet
 gcloud compute addresses delete mc-server-ip --region=REGION --quiet
 gcloud compute firewall-rules delete minecraft-rule --quiet
-gcloud storage rm -r gs://$PROJECT_ID-minecraft-backup
-```
+gcloud storage rm -r gs://$

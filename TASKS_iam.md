@@ -182,6 +182,4 @@ The upload succeeds now.
 
 ```bash
 gcloud compute instances delete demoiam --zone=ZONE --quiet
-gcloud iam service-accounts delete read-bucket-objects@$PROJECT_ID.iam.gserviceaccount.com --quiet
-gcloud storage rm -r gs://$PROJECT_ID
-```
+gcloud iam service-accounts delete read-bucket-objects@$PROJECT_ID.iam.gser

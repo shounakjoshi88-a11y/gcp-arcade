@@ -326,4 +326,4 @@ cd ~/gsp345
 terraform destroy -auto-approve
 ```
 
-The bucket is created with `force_destroy = true`, so it goes too.
+The bucket is created with `force_destroy = true`

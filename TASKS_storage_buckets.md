@@ -190,5 +190,4 @@ gcloud storage rsync ./firstlevel gs://$BUCKET_NAME_1/firstlevel --recursive
 ## Clean up
 
 ```bash
-gcloud storage rm -r gs://$BUCKET_NAME_1
-```
+gcloud storag
