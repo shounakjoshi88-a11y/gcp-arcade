@@ -225,4 +225,5 @@ gcloud sql instances delete griffin-dev-db
 gcloud deployment-manager deployments delete prod-network
 gcloud compute instances delete bastion --zone $ZONE
 gcloud compute firewall-rules delete fw-ssh-dev fw-ssh-prod
-gcloud compute networks delete
+gcloud compute networks delete griffin-dev-vpc griffin-prod-vpc
+```

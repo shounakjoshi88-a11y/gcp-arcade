@@ -168,4 +168,5 @@ exit
 ## Clean up
 
 ```bash
-gcloud compute instances delete utility-vm utilit
+gcloud compute instances delete utility-vm utility-wm utility-cm --zone=ZONE --quiet
+```

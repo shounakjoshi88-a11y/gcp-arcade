@@ -190,4 +190,5 @@ gcloud compute instances delete vm-internal --zone=ZONE --quiet
 gcloud compute routers nats delete nat-config --router=nat-router --region=REGION --quiet
 gcloud compute routers delete nat-router --region=REGION --quiet
 gcloud compute networks delete privatenet --quiet
-gclou
+gcloud storage rm -r gs://$MY_BUCKET
+```

@@ -251,7 +251,8 @@ Want the lab's verbatim HashiCorp apt-repository method instead?
 | `--zone ZONE` | `gcloud config compute/zone` | Zone for the instance |
 | `--region REGION` | `gcloud config compute/region` | Region (informational) |
 | `--image IMAGE` | auto-detected Debian image | Boot disk image |
-| `--machi `terraform` | Instance name |
+| `--machine-type T` | `e2-medium` | Machine type |
+| `--name NAME` | `terraform` | Instance name |
 | `--workdir PATH` | `$HOME/gsp156` | Where `instance.tf` lives |
 | `--install-method M` | `binary` | `binary` or `apt` |
 | `--destroy` | off | Destroy the infrastructure and exit |
@@ -589,7 +590,8 @@ The lab assigns **two** zones per run and they cannot be read from the
 project, so the script asks for both:
 
 ```
-  Zone 1  [us:
+  Zone 1  [us-central1-a]:
+  Zone 2  [us-west1-b]:
 ```
 
 The regions are derived from the zones, because the lab's `default_region` is
@@ -910,7 +912,8 @@ gcloud compute ssh mc-server --command="echo '<base64>' | base64 -d | bash"
 Some reference scripts create the VM with `--metadata=enable-oslogin=true`.
 With OS Login enabled, `gcloud compute ssh` and `gcloud compute scp` use the
 OS Login flow, which needs the **`roles/iam.osLogin`** permission — and a lab
-student account usually does not have it. Botgh the console's **SSH** button works (it uses the
+student account usually does not have it. Both commands then fail with a
+permissions error, even though the console's **SSH** button works (it uses the
 classic metadata-based key).
 
 The script creates the VM **without** that metadata item, and if it finds an
@@ -1224,7 +1227,8 @@ nohup ./cloud_sql_proxy -instances=$CONNECTION_NAME=tcp:3306 > proxy.log 2>&1 &
   (`--authorized-networks` wants a bare `IP/32`, not `name=IP/32`.)
 - **Prints the browser steps** for both WordPress front ends, with the right
   database host filled in — `127.0.0.1` for the proxy one and the Cloud SQL
-  private IP for the oe scripted.
+  private IP for the other. The WordPress setup is a web form, so that part
+  cannot be scripted.
 
 ### Options
 
@@ -1540,49 +1544,5 @@ not a bug.
 ```
 gsp321.sh             # GSP321 - Develop Your Google Cloud Network
 gsp156.sh             # GSP156 - Terraform Fundamentals
-gsp345.sh             # GSP345 - Build Infrastructure with Terraform: Challerketplace
-gsp_vpc.sh            # Get Started with VPC Networking and Compute Engine
-gsp_vpc_networks.sh    # Create and Configure VPC Networks
-gsp_pga_nat.sh         # Implement Private Google Access and Cloud NAT
-gsp_create_vms.sh      # Create Virtual Machines
-gsp_minecraft.sh        # Create and Configure Virtual Machines - Minecraft server
-gsp_iam.sh              # Exploring IAM
-gsp_storage_buckets.sh   # Cloud Storage buckets and encryption
-gsp_configure_sql.sh      # Configure Cloud SQL
-gsp_bigquery_billing.sh   # Examine Billing data with BigQuery
-gsp_observability.sh      # Monitor resources with Cloud Observability
-gsp_storagesql.sh     # Getting Started with Cloud Storage and Cloud SQL
-gsp_cloudrun.sh       # Hello Cloud Run
-gsp_console_shell.sh  # Explore the Google Cloud Console and Cloud Shell
-TASKS.md              # GSP321, task by task, for manual runs
-TASKS156.md           # GSP156, task by task, for manual runs
-TASKS345.md           # GSP345, task by task, for manual runs
-TASKS_marketplace.md  # Deploy a LAMP Stack with Cloud Marketplace, by hand
-TASKS_vpc_networks.md  # Create and Configure VPC Networks, by hand
-TASKS_pga_nat.md       # Private Google Access and Cloud NAT, by hand
-TASKS_create_vms.md    # Create Virtual Machines, by hand
-TASKS_minecraft.md      # Create and Configure Virtual Machines, by hand
-TASKS_iam.md            # Exploring IAM, by hand
-TASKS_storage_buckets.md # Cloud Storage buckets and encryption, by hand
-TASKS_configure_sql.md   # Configure Cloud SQL, by hand
-TASKS_bigquery_billing.md # Examine Billing data with BigQuery, by hand
-TASKS_observability.md    # Cloud Observability, by hand
-TASKS_storagesql.md   # Cloud Storage and Cloud SQL, task by task, for manual runs
-TASKS_cloudrun.md     # Hello Cloud Run, task by task, for manual runs
-TASKS_console_shell.md # Explore the Google Cloud Console and Cloud Shell, by hand
-README.md             # this file
-LICENSE               # MIT
-```
-
-## Credits
-
-Lab content and manifests come from the public `gs://spls/gsp321/` bucket
-(current) and `gs://cloud-training/gsp321/` (older). The original one-shot
-script for GSP321 was published by PerkVerse for Google Cloud Arcade; this
-repo is a corrected, idempotent rewrite that fixes the uptime-check race
-condition and the IAM role replacement.
-
-> **Reminder:** these provision real billable GCP resources — a GKE cluster, a
-> Cloud SQL instance, a load balancer, a VM. Tear them down when you're done:
-> `./gsp321.sh` resources can be removed with the `gcloud` commands in
-> `TASKS.md`, and `./gsp156.sh --destroy` removes the Terraform-managed VM
+gsp345.sh             # GSP345 - Build Infrastructure with Terraform: Challenge Lab
+gsp_marketplace.sh    # Deploy a LAMP Stack with Google Cloud Ma

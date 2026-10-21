@@ -184,4 +184,5 @@ Click **Check my progress** — *Analyze a large billing dataset with SQL*.
 
 ```bash
 bq rm -f -t $PROJECT_ID:billing_dataset.sampleinfotable
-bq rm -f -
+bq rm -f -d $PROJECT_ID:billing_dataset
+```

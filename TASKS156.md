@@ -174,4 +174,5 @@ terraform destroy
 Or, to also remove the state and the downloaded provider:
 
 ```bash
-rm -rf .terraform .terraform.lock.hcl terraform.tfstate terraform.t
+rm -rf .terraform .terraform.lock.hcl terraform.tfstate terraform.tfstate.backup
+```

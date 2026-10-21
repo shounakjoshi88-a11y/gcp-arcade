@@ -126,4 +126,5 @@ gcloud compute ssh bloghost --zone=ZONE --command="sudo service apache2 restart"
 ```bash
 gcloud sql instances delete blog-db --quiet
 gcloud compute instances delete bloghost --zone=ZONE --quiet
-gcloud storage rm -r gs://
+gcloud storage rm -r gs://$PROJECT_ID
+```

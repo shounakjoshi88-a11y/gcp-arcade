@@ -126,4 +126,5 @@ gcloud compute firewall-rules delete mynetwork-allow-ssh --quiet
 ```bash
 gcloud compute instances delete mynet-us-vm --zone=REGION_1-a --quiet
 gcloud compute instances delete mynet-r2-vm --zone=REGION_2-b --quiet
-gcloud compute networks delete mynetwor
+gcloud compute networks delete mynetwork --quiet
+```

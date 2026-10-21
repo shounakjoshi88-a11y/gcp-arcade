@@ -145,4 +145,5 @@ gcloud deployment-manager deployments delete lamp-1 --quiet
 Or, with the script:
 
 ```bash
-./gsp_mar
+./gsp_marketplace.sh --destroy
+```

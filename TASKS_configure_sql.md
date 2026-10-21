@@ -246,4 +246,5 @@ connection works.
 
 ```bash
 gcloud sql instances delete wordpress-db --quiet
-gcloud compute addresses delete default-ip-ran
+gcloud compute addresses delete default-ip-range --global --quiet
+```

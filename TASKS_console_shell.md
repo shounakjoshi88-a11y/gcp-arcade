@@ -150,4 +150,5 @@ It is still there.
 
 ```bash
 gcloud storage rm -r gs://$PROJECT_ID-2
-gcloud storage rm 
+gcloud storage rm -r gs://$PROJECT_ID
+```
