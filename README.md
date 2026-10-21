@@ -1332,24 +1332,29 @@ console, and still scores 0** — and the console form never hints that the
 layout is what is being graded. This is the most common way to lose points on
 this lab, so the script uses `gridLayout` explicitly.
 
-### The resource group has to actually match the VMs
+### A resource group cannot be filtered on the instance NAME
 
-The console's *Value: nginx* produces a group that may have **no members at
-all** — and a group with no members does not score either. So the script
-creates the group, then reads the member list back and keeps the first filter
-form that actually matches:
+The API only accepts these filter objects for `projects.groups.create`:
 
-```bash
-curl -s -H "Authorization: Bearer $TOKEN" \
-  "https://monitoring.googleapis.com/v3/projects/$PROJECT_ID/groups/GROUP_ID/members"
+```
+project, resource.type, resource.labels.KEY,
+metadata.system_labels.KEY, metadata.user_labels.KEY
 ```
 
-The filter forms it tries, in order:
+and the `gce_instance` monitored resource only has the labels `instance_id`,
+`zone` and `project_id` — **there is no `name` label**. So
+`resource.metadata.name` is not a real field, and a filter built on it is
+accepted by the API but matches nothing.
 
-1. `resource.type = "gce_instance" AND resource.metadata.name = starts_with("nginx")`
-2. `resource.type = "gce_instance" AND metadata.system_labels.name = starts_with("nginx")`
-3. `resource.type = "gce_instance" AND resource.metadata.name = has_substring("nginx")`
-4. `resource.metadata.name = has_substring("nginx")`
+The filters that actually work are:
+
+1. `resource.type = "gce_instance" AND resource.labels.zone = starts_with("ZONE")`
+2. `resource.type = "gce_instance"`
+
+The script tries them in turn, **updates the same group** rather than
+creating and deleting it, and keeps the first one that really matches. It
+prints the member list so you can see it worked, and `--group-filter "..."`
+forces a specific filter.
 
 ### One shell trap worth knowing
 
@@ -1373,6 +1378,7 @@ printf '{
 | `--project ID` | active gcloud project | Target project |
 | `--email EMAIL` | your account | The address for the notification channel |
 | `--zone ZONE` | detected from the VMs | The lab's zone |
+| `--group-filter F` | auto | The exact filter for the resource group |
 | `--task N` | all | Run only task N (1–6) |
 | `--yes` | off | Do not pause for the checkpoints |
 | `-h, --help` | | Usage |

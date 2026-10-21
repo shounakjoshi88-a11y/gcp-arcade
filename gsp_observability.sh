@@ -15,6 +15,7 @@
 #     --project ID      GCP project (default: active gcloud project)
 #     --email EMAIL     the address for the notification channel
 #     --zone ZONE       the zone of the lab's VMs (detected)
+#     --group-filter F  the exact filter for the resource group
 #     --task N          run only task N (2-6)
 #     --yes             do not pause for the checkpoints
 #     -h, --help        this help
@@ -81,6 +82,7 @@ OPTIONS:
    --project ID      GCP project (default: active gcloud project)
    --email EMAIL     the address for the notification channel
    --zone ZONE       the zone of the lab's VMs (detected)
+   --group-filter F  the exact filter for the resource group
    --task N          run only task N (2-6)
    --yes             do not pause for the checkpoints
    -h, --help        this help
@@ -93,6 +95,7 @@ while [ $# -gt 0 ]; do
     --project) PROJECT_OVERRIDE="$2"; shift 2 ;;
     --email)   EMAIL_OVERRIDE="$2";   shift 2 ;;
     --zone)    ZONE_OVERRIDE="$2";    shift 2 ;;
+    --group-filter) GROUP_FILTER_OVERRIDE="$2"; shift 2 ;;
     --task)    ONLY_TASK="$2";        shift 2 ;;
     --yes)     ASSUME_YES=1;          shift ;;
     -h|--help) usage ;;
@@ -430,15 +433,21 @@ EOF
 task4() {
   step "Task 4 - Resource groups"
 
-  # A group with a plausible filter but no members does not score, so the
-  # filter forms are tried until the member list actually matches.
+  # The Cloud Monitoring API only accepts these filter objects for a group:
+  #   project, resource.type, resource.labels.KEY, metadata.system_labels.KEY,
+  #   metadata.user_labels.KEY
+  # The gce_instance descriptor only has instance_id, zone and project_id
+  # labels, so a group CANNOT be filtered by the instance NAME. The filters
+  # that do work match on the zone, or on the resource type alone.
   local -a FILTERS=(
-    'resource.type = "gce_instance" AND resource.metadata.name = starts_with("nginx")'
-    'resource.type = "gce_instance" AND metadata.system_labels.name = starts_with("nginx")'
-    'resource.type = "gce_instance" AND resource.metadata.name = has_substring("nginx")'
-    'resource.metadata.name = has_substring("nginx")'
+    "resource.type = \"gce_instance\" AND resource.labels.zone = starts_with(\"$ZONE\")"
+    "resource.type = \"gce_instance\""
   )
+  if [ -n "${GROUP_FILTER_OVERRIDE:-}" ]; then
+    FILTERS=("$GROUP_FILTER_OVERRIDE")
+  fi
 
+  # does the group already exist?
   GROUP_FULL="$(curl -s -H "Authorization: Bearer $TOKEN" \
                  "$API/v3/projects/$PROJECT_ID/groups" 2>/dev/null \
                  | tr '{' '\n' | grep "\"displayName\": *\"$GROUP_NAME\"" \
@@ -447,11 +456,23 @@ task4() {
   if [ -n "$GROUP_FULL" ]; then
     ok "the group '$GROUP_NAME' already exists"
   else
-    local F RESP COUNT
-    for F in "${FILTERS[@]}"; do
-      dim "    trying: $F"
-      # the filter contains double quotes of its own, so it is json escaped
-      # and the body is built with printf, which leaves the backslashes alone
+    GROUP_FULL=""
+  fi
+
+  local F RESP COUNT FIRST_ACCEPTED=""
+  for F in "${FILTERS[@]}"; do
+    dim "    trying: $F"
+    if [ -n "$GROUP_FULL" ]; then
+      # the group exists, so just change its filter
+      RESP="$(curl -s -X PATCH "$API/v3/$GROUP_FULL" \
+                -H "Authorization: Bearer $TOKEN" \
+                -H "Content-Type: application/json" \
+                -d "{
+                      \"name\": \"$GROUP_FULL\",
+                      \"displayName\": \"$GROUP_NAME\",
+                      \"filter\": \"$(json_escape "$F")\"
+                    }")"
+    else
       printf '{\n  "displayName": "%s",\n  "filter": "%s"\n}\n' \
         "$GROUP_NAME" "$(json_escape "$F")" > "$WORKDIR/group.json"
       RESP="$(curl -s -X POST "$API/v3/projects/$PROJECT_ID/groups" \
@@ -459,30 +480,48 @@ task4() {
                 -H "Content-Type: application/json" \
                 -d @"$WORKDIR/group.json")"
       GROUP_FULL="$(json_str "$RESP" name)"
-      [ -z "$GROUP_FULL" ] && continue
-      COUNT="$(group_members "$GROUP_FULL" | grep -c nginxstack)"
-      if [ "${COUNT:-0}" -ge 1 ] 2>/dev/null; then
-        ok "created the group and it matches $COUNT VM instances"
-        break
-      fi
-      # the filter did not match, try the next one
-      curl -s -X DELETE "$API/v3/$GROUP_FULL" \
-        -H "Authorization: Bearer $TOKEN" >/dev/null 2>&1
-      GROUP_FULL=""
-    done
-    if [ -z "$GROUP_FULL" ]; then
-      note_fail "could not create a resource group that matches the VMs"
-      dim "  the lab's instances are:"
-      echo "$LAB_VMS" | sed 's/^/    /'
-      dim "  if they are not there yet, wait for them and re-run"
-      return 1
     fi
+
+    if [ -z "$GROUP_FULL" ]; then
+      # the API refused the filter - say why and try the next one
+      dim "      the API said:"
+      printf '%s\n' "$RESP" | head -4 | sed 's/^/        /'
+      continue
+    fi
+
+    [ -z "$FIRST_ACCEPTED" ] && FIRST_ACCEPTED="$F"
+
+    COUNT="$(group_members "$GROUP_FULL" | grep -o nginxstack | wc -l | tr -d ' ')"
+    if [ "${COUNT:-0}" -ge 1 ] 2>/dev/null; then
+      ok "the group matches $COUNT of the lab's VMs"
+      break
+    fi
+    dim "      it matched nothing, trying the next filter"
+  done
+
+  if [ -z "$GROUP_FULL" ]; then
+    note_fail "could not create the resource group"
+    dim "  the API refused every filter. It only accepts:"
+    dim "    project, resource.type, resource.labels.KEY,"
+    dim "    metadata.system_labels.KEY, metadata.user_labels.KEY"
+    return 1
   fi
 
   GROUP_ID="$(printf '%s' "$GROUP_FULL" | awk -F/ '{print $NF}')"
   ok "the group id is $GROUP_ID"
-  dim "    members:"
-  group_members "$GROUP_FULL" | grep nginxstack | sed 's/^/      /'
+
+  COUNT="$(group_members "$GROUP_FULL" | grep -o nginxstack | wc -l | tr -d ' ')"
+  if [ "${COUNT:-0}" -ge 1 ] 2>/dev/null; then
+    dim "    the filter is: $FIRST_ACCEPTED"
+    dim "    members:"
+    group_members "$GROUP_FULL" | grep nginxstack | sed 's/^/      /'
+  else
+    warn "the group has no members"
+    dim "  the filter that was accepted is: $FIRST_ACCEPTED"
+    dim "  a group can only be filtered on resource.type, resource.labels,"
+    dim "  metadata.system_labels and metadata.user_labels - the instance NAME"
+    dim "  is not one of them, so it cannot be matched on 'nginx'."
+  fi
 
   pause_for_check 4 "Create Resource Group"
 }

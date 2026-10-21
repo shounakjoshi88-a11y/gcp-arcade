@@ -153,13 +153,25 @@ curl -s -X POST \
 >   "https://monitoring.googleapis.com/v3/projects/$PROJECT_ID/groups/GROUP_ID/members"
 > ```
 >
-> The script tries the filter forms in turn and keeps the first one that
-> actually matches:
+> **A group cannot be filtered on the instance NAME.** The API only accepts
+> these filter objects for `projects.groups.create`:
 >
-> 1. `resource.type = "gce_instance" AND resource.metadata.name = starts_with("nginx")`
-> 2. `resource.type = "gce_instance" AND metadata.system_labels.name = starts_with("nginx")`
-> 3. `resource.type = "gce_instance" AND resource.metadata.name = has_substring("nginx")`
-> 4. `resource.metadata.name = has_substring("nginx")`
+> ```
+> project, resource.type, resource.labels.KEY,
+> metadata.system_labels.KEY, metadata.user_labels.KEY
+> ```
+>
+> and the `gce_instance` monitored resource only has the labels
+> `instance_id`, `zone` and `project_id` — there is no `name` label, so
+> `resource.metadata.name` is not a thing and a filter built on it matches
+> nothing. The filters that work are:
+>
+> 1. `resource.type = "gce_instance" AND resource.labels.zone = starts_with("ZONE")`
+> 2. `resource.type = "gce_instance"`
+>
+> The script tries them in turn, **updates the same group** rather than
+> creating and deleting it, and keeps the first one that actually matches.
+> Force a specific filter with `--group-filter "..."`.
 
 ## Task 5 — Uptime monitoring
 
