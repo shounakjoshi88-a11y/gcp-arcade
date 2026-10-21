@@ -50,6 +50,38 @@ dim()  { printf "  %s%s%s\n"          "$C_DIM"    "$*"       "$C_RESET"; }
 FAILURES=0
 note_fail() { err "$1"; FAILURES=$((FAILURES + 1)); }
 
+# Run a command and show its output as it arrives. Creating a Cloud SQL
+# instance blocks for minutes while the operation runs, and a silent wait
+# looks exactly like a hang.
+run_live() {  # $1 = log file, rest = command
+  local log="$1"; shift
+  local pid last=0 n elapsed=0
+  : > "$log"
+  "$@" > "$log" 2>&1 &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 2
+    elapsed=$((elapsed + 2))
+    n="$(wc -l < "$log" 2>/dev/null | tr -d ' ')"
+    [ -z "$n" ] && n=0
+    if [ "$n" -gt "$last" ]; then
+      tail -n +$((last + 1)) "$log" | sed 's/^/    /'
+      last="$n"
+    elif [ $((elapsed % 20)) -eq 0 ]; then
+      printf "    ... still working (%ss elapsed)\n" "$elapsed"
+    fi
+  done
+  wait "$pid"
+  local rc=$?
+  n="$(wc -l < "$log" 2>/dev/null | tr -d ' ')"
+  [ -z "$n" ] && n=0
+  if [ "$n" -gt "$last" ]; then
+    tail -n +$((last + 1)) "$log" | sed 's/^/    /'
+  fi
+  return $rc
+}
+
+
 PROJECT_OVERRIDE=""
 ZONE_OVERRIDE=""
 REGION_OVERRIDE=""
@@ -505,8 +537,8 @@ task4() {
 
     local attempt bad kept a
     for attempt in 1 2 3 4 5 6 7 8 9; do
-      if gcloud sql instances create "$SQL_NAME" "${SQL_ARGS[@]}" \
-           --project="$PROJECT_ID" --quiet > "$SQL_LOG" 2>&1; then
+      if run_live "$SQL_LOG" gcloud sql instances create "$SQL_NAME" "${SQL_ARGS[@]}" \
+           --project="$PROJECT_ID" --quiet; then
         ok "created $SQL_NAME"
         break
       fi
