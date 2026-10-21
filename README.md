@@ -16,7 +16,8 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp_iam.sh`](./gsp_iam.sh) | **Exploring IAM** | The bucket and sample file, revoking and granting project roles, the service account and the VM that runs as it | — |
 | [`gsp_storage_buckets.sh`](./gsp_storage_buckets.sh) | **Create and Manage Cloud Storage Buckets and Encryption** | The bucket, the public ACL, the customer-supplied key, the lifecycle rule and versioning | — |
 | [`gsp_configure_sql.sh`](./gsp_configure_sql.sh) | **Configure Cloud SQL** | The `wordpress-db` instance with a Private IP, the `wordpress` database and the Cloud SQL Auth Proxy | 100/100 |
-| [`gsp_bigquery_billing.sh`](./gsp_bigquery_billing.sh) | **Examine Billing data with BigQuery** | The dataset, the Avro load, and the lab's seven billing queries | — |
+| [`gsp_bigquery_billing.sh`](./gsp_bigquery_billing.sh) | **Examine Billing data with BigQuery** | The dataset, the Avro load, and the lab's seven billing queries | 100/100 |
+| [`gsp_observability.sh`](./gsp_observability.sh) | **Monitor Resources with Google Cloud Observability** | A custom dashboard, an alert policy, a resource group and an uptime check | — |
 | [`gsp_storagesql.sh`](./gsp_storagesql.sh) | **Cloud Storage and Cloud SQL** — Getting Started | Web server VM, public bucket, Cloud SQL instance, and the PHP page wired to both | 100/100 |
 | [`gsp_cloudrun.sh`](./gsp_cloudrun.sh) | **Hello Cloud Run** | Node.js app, Artifact Registry repo, container image, and the Cloud Run deployment | 100/100 |
 | [`gsp_console_shell.sh`](./gsp_console_shell.sh) | **Explore the Google Cloud Console and Cloud Shell** | The console bucket, the Cloud Shell bucket, the file upload, and the persistent environment variables | — |
@@ -1307,6 +1308,79 @@ the run never looks like it has hung.
 
 ---
 
+## Monitor Resources with Google Cloud Observability
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_observability.sh
+chmod +x gsp_observability.sh
+./gsp_observability.sh
+```
+
+| # | Checkpoint | What the script does |
+|---|---|---|
+| 1 | Create custom dashboard | `My Dashboard` with a `gridLayout` and a line chart of CPU utilization ⏸ |
+| 2 | Create alerting policies | an email notification channel and `My Alert Policy` with two conditions ANDed ⏸ |
+| 3 | Create Resource Group | `VM instances`, with the filter checked against the real member list ⏸ |
+| 4 | Create uptime check | `My Uptime check` on the group, plus an alert policy for it ⏸ |
+
+Then it disables the alert policy, which is what the lab's last task asks for.
+
+### The dashboard has to use a gridLayout
+
+A dashboard with any other layout is **accepted by the API, shows up in the
+console, and still scores 0** — and the console form never hints that the
+layout is what is being graded. This is the most common way to lose points on
+this lab, so the script uses `gridLayout` explicitly.
+
+### The resource group has to actually match the VMs
+
+The console's *Value: nginx* produces a group that may have **no members at
+all** — and a group with no members does not score either. So the script
+creates the group, then reads the member list back and keeps the first filter
+form that actually matches:
+
+```bash
+curl -s -H "Authorization: Bearer $TOKEN" \
+  "https://monitoring.googleapis.com/v3/projects/$PROJECT_ID/groups/GROUP_ID/members"
+```
+
+The filter forms it tries, in order:
+
+1. `resource.type = "gce_instance" AND resource.metadata.name = starts_with("nginx")`
+2. `resource.type = "gce_instance" AND metadata.system_labels.name = starts_with("nginx")`
+3. `resource.type = "gce_instance" AND resource.metadata.name = has_substring("nginx")`
+4. `resource.metadata.name = has_substring("nginx")`
+
+### One shell trap worth knowing
+
+The filter contains double quotes of its own, so it has to be **json
+escaped** before it goes into a request body, and the body has to be built
+with `printf` rather than a heredoc — a heredoc would eat the backslashes:
+
+```bash
+printf '{
+  "displayName": "%s",
+  "filter": "%s"
+}
+' \
+  "$GROUP_NAME" "$(json_escape "$F")" > group.json
+```
+
+### Options
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--project ID` | active gcloud project | Target project |
+| `--email EMAIL` | your account | The address for the notification channel |
+| `--zone ZONE` | detected from the VMs | The lab's zone |
+| `--task N` | all | Run only task N (1–6) |
+| `--yes` | off | Do not pause for the checkpoints |
+| `-h, --help` | | Usage |
+
+---
+
+---
+
 ## Cloud Storage and Cloud SQL — Getting Started
 
 ```bash
@@ -1463,55 +1537,5 @@ not a bug.
 
 ---
 
-## Layout
-
-
-
-```
-gsp321.sh             # GSP321 - Develop Your Google Cloud Network
-gsp156.sh             # GSP156 - Terraform Fundamentals
-gsp345.sh             # GSP345 - Build Infrastructure with Terraform: Challenge Lab
-gsp_marketplace.sh    # Deploy a LAMP Stack with Google Cloud Marketplace
-gsp_vpc.sh            # Get Started with VPC Networking and Compute Engine
-gsp_vpc_networks.sh    # Create and Configure VPC Networks
-gsp_pga_nat.sh         # Implement Private Google Access and Cloud NAT
-gsp_create_vms.sh      # Create Virtual Machines
-gsp_minecraft.sh        # Create and Configure Virtual Machines - Minecraft server
-gsp_iam.sh              # Exploring IAM
-gsp_storage_buckets.sh   # Cloud Storage buckets and encryption
-gsp_configure_sql.sh      # Configure Cloud SQL
-gsp_bigquery_billing.sh   # Examine Billing data with BigQuery
-gsp_storagesql.sh     # Getting Started with Cloud Storage and Cloud SQL
-gsp_cloudrun.sh       # Hello Cloud Run
-gsp_console_shell.sh  # Explore the Google Cloud Console and Cloud Shell
-TASKS.md              # GSP321, task by task, for manual runs
-TASKS156.md           # GSP156, task by task, for manual runs
-TASKS345.md           # GSP345, task by task, for manual runs
-TASKS_marketplace.md  # Deploy a LAMP Stack with Cloud Marketplace, by hand
-TASKS_vpc_networks.md  # Create and Configure VPC Networks, by hand
-TASKS_pga_nat.md       # Private Google Access and Cloud NAT, by hand
-TASKS_create_vms.md    # Create Virtual Machines, by hand
-TASKS_minecraft.md      # Create and Configure Virtual Machines, by hand
-TASKS_iam.md            # Exploring IAM, by hand
-TASKS_storage_buckets.md # Cloud Storage buckets and encryption, by hand
-TASKS_configure_sql.md   # Configure Cloud SQL, by hand
-TASKS_bigquery_billing.md # Examine Billing data with BigQuery, by hand
-TASKS_storagesql.md   # Cloud Storage and Cloud SQL, task by task, for manual runs
-TASKS_cloudrun.md     # Hello Cloud Run, task by task, for manual runs
-TASKS_console_shell.md # Explore the Google Cloud Console and Cloud Shell, by hand
-README.md             # this file
-LICENSE               # MIT
-```
-
-## Credits
-
-Lab content and manifests come from the public `gs://spls/gsp321/` bucket
-(current) and `gs://cloud-training/gsp321/` (older). The original one-shot
-script for GSP321 was published by PerkVerse for Google Cloud Arcade; this
-repo is a corrected, idempotent rewrite that fixes the uptime-check race
-condition and the IAM role replacement.
-
-> **Reminder:** these provision real billable GCP resources — a GKE cluster, a
-> Cloud SQL instance, a load balancer, a VM. Tear them down when you're done:
-> `./gsp321.sh` resources can be removed with the `gcloud` commands in
-> `TASKS.md`, and `./gsp156.sh --destroy` removes the Terraform-managed VM.
+#
+...[truncated]...
