@@ -15,7 +15,8 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp_minecraft.sh`](./gsp_minecraft.sh) | **Create and Configure Virtual Machines** | A Minecraft server VM: SSD data disk, static IP, the JRE, the server, firewall, backups and maintenance scripts | — |
 | [`gsp_iam.sh`](./gsp_iam.sh) | **Exploring IAM** | The bucket and sample file, revoking and granting project roles, the service account and the VM that runs as it | — |
 | [`gsp_storage_buckets.sh`](./gsp_storage_buckets.sh) | **Create and Manage Cloud Storage Buckets and Encryption** | The bucket, the public ACL, the customer-supplied key, the lifecycle rule and versioning | — |
-| [`gsp_configure_sql.sh`](./gsp_configure_sql.sh) | **Configure Cloud SQL** | The `wordpress-db` instance with a Private IP, the `wordpress` database and the Cloud SQL Auth Proxy | — |
+| [`gsp_configure_sql.sh`](./gsp_configure_sql.sh) | **Configure Cloud SQL** | The `wordpress-db` instance with a Private IP, the `wordpress` database and the Cloud SQL Auth Proxy | 100/100 |
+| [`gsp_bigquery_billing.sh`](./gsp_bigquery_billing.sh) | **Examine Billing data with BigQuery** | The dataset, the Avro load, and the lab's seven billing queries | — |
 | [`gsp_storagesql.sh`](./gsp_storagesql.sh) | **Cloud Storage and Cloud SQL** — Getting Started | Web server VM, public bucket, Cloud SQL instance, and the PHP page wired to both | 100/100 |
 | [`gsp_cloudrun.sh`](./gsp_cloudrun.sh) | **Hello Cloud Run** | Node.js app, Artifact Registry repo, container image, and the Cloud Run deployment | 100/100 |
 | [`gsp_console_shell.sh`](./gsp_console_shell.sh) | **Explore the Google Cloud Console and Cloud Shell** | The console bucket, the Cloud Shell bucket, the file upload, and the persistent environment variables | — |
@@ -1247,6 +1248,65 @@ nohup ./cloud_sql_proxy -instances=$CONNECTION_NAME=tcp:3306 > proxy.log 2>&1 &
 
 ---
 
+## Examine Billing data with BigQuery
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_bigquery_billing.sh
+chmod +x gsp_bigquery_billing.sh
+./gsp_bigquery_billing.sh
+```
+
+| # | Checkpoint | What the script does |
+|---|---|---|
+| 1 | Use BigQuery to import data | the `billing_dataset` dataset in `US` with a 1-day table expiration, then loads the Avro file into `sampleinfotable` ⏸ |
+| 2 | Compose a simple query | `SELECT * FROM billing_dataset.sampleinfotable WHERE cost > 0` ⏸ |
+| 3 | Analyze a large billing dataset with SQL | all seven of the lab's queries, including the 415,602-row one ⏸ |
+
+### The table expiration is verified, not assumed
+
+The console asks for **1 day**, and the API stores that in milliseconds —
+but the `bq` flag for it is spelled differently between versions, and the
+unit is easy to get wrong. A 1-day expiry read as *seconds* would delete the
+table out from under you.
+
+So the script creates the dataset, reads the value back through the API, and
+corrects it if it is not right:
+
+```bash
+curl -X PATCH "https://bigquery.googleapis.com/bigquery/v2/projects/$PROJECT_ID/datasets/billing_dataset" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"defaultTableExpirationMs":"86400000"}'
+```
+
+### The checkpoints are scored from the query job history
+
+So the queries have to actually **run** — pasting them into the BigQuery
+console and running them with `bq query` land in the same history, and the
+script runs the lab's SQL text verbatim.
+
+### The load takes a minute or two
+
+The sample file is a 160 MB Avro export, and `bq load` blocks until the job
+finishes. The script streams its output and heartbeats while it waits, so
+the run never looks like it has hung.
+
+### Options
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--project ID` | active gcloud project | Target project |
+| `--dataset NAME` | `billing_dataset` | The dataset |
+| `--table NAME` | `sampleinfotable` | The table |
+| `--source URI` | the lab's Avro file | The file to load |
+| `--task N` | all | Run only task N (1–4) |
+| `--yes` | off | Do not pause for the checkpoints |
+| `-h, --help` | | Usage |
+
+---
+
+---
+
 ## Cloud Storage and Cloud SQL — Getting Started
 
 ```bash
@@ -1420,6 +1480,7 @@ gsp_minecraft.sh        # Create and Configure Virtual Machines - Minecraft serv
 gsp_iam.sh              # Exploring IAM
 gsp_storage_buckets.sh   # Cloud Storage buckets and encryption
 gsp_configure_sql.sh      # Configure Cloud SQL
+gsp_bigquery_billing.sh   # Examine Billing data with BigQuery
 gsp_storagesql.sh     # Getting Started with Cloud Storage and Cloud SQL
 gsp_cloudrun.sh       # Hello Cloud Run
 gsp_console_shell.sh  # Explore the Google Cloud Console and Cloud Shell
@@ -1434,6 +1495,7 @@ TASKS_minecraft.md      # Create and Configure Virtual Machines, by hand
 TASKS_iam.md            # Exploring IAM, by hand
 TASKS_storage_buckets.md # Cloud Storage buckets and encryption, by hand
 TASKS_configure_sql.md   # Configure Cloud SQL, by hand
+TASKS_bigquery_billing.md # Examine Billing data with BigQuery, by hand
 TASKS_storagesql.md   # Cloud Storage and Cloud SQL, task by task, for manual runs
 TASKS_cloudrun.md     # Hello Cloud Run, task by task, for manual runs
 TASKS_console_shell.md # Explore the Google Cloud Console and Cloud Shell, by hand

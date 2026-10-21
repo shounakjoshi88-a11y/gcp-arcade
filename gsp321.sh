@@ -57,6 +57,38 @@ dim()  { printf "  %s%s%s\n"          "$C_DIM"    "$*"       "$C_RESET"; }
 FAILURES=0
 note_fail() { err "$1"; FAILURES=$((FAILURES + 1)); }
 
+# Run a command and show its output as it arrives. Creating a Cloud SQL
+# instance or a GKE cluster blocks for minutes while the operation runs, and
+# a silent wait looks exactly like a hang.
+run_live() {  # $1 = log file, rest = command
+  local log="$1"; shift
+  local pid last=0 n elapsed=0
+  : > "$log"
+  "$@" > "$log" 2>&1 &
+  pid=$!
+  while kill -0 "$pid" 2>/dev/null; do
+    sleep 2
+    elapsed=$((elapsed + 2))
+    n="$(wc -l < "$log" 2>/dev/null | tr -d ' ')"
+    [ -z "$n" ] && n=0
+    if [ "$n" -gt "$last" ]; then
+      tail -n +$((last + 1)) "$log" | sed 's/^/    /'
+      last="$n"
+    elif [ $((elapsed % 20)) -eq 0 ]; then
+      printf "    ... still working (%ss elapsed)\n" "$elapsed"
+    fi
+  done
+  wait "$pid"
+  local rc=$?
+  n="$(wc -l < "$log" 2>/dev/null | tr -d ' ')"
+  [ -z "$n" ] && n=0
+  if [ "$n" -gt "$last" ]; then
+    tail -n +$((last + 1)) "$log" | sed 's/^/    /'
+  fi
+  return $rc
+}
+
+
 # ---------------------------------------------------------------------------
 # defaults + argument parsing
 # ---------------------------------------------------------------------------
@@ -370,8 +402,8 @@ if [ -f "$WORKDIR/dm/prod-network.yaml" ]; then
   if gcloud deployment-manager deployments describe "$DEPLOYMENT_MANAGER_NAME" >/dev/null 2>&1; then
     ok "deployment $DEPLOYMENT_MANAGER_NAME already exists"
   else
-    if gcloud deployment-manager deployments create "$DEPLOYMENT_MANAGER_NAME" \
-         --config="$WORKDIR/dm/prod-network.yaml" --quiet >/dev/null 2>&1; then
+    if run_live "$WORKDIR/dm-create.log" gcloud deployment-manager deployments create "$DEPLOYMENT_MANAGER_NAME" \
+         --config="$WORKDIR/dm/prod-network.yaml" --quiet ; then
       ok "created deployment $DEPLOYMENT_MANAGER_NAME"
     else
       note_fail "could not create deployment $DEPLOYMENT_MANAGER_NAME"
@@ -406,14 +438,14 @@ if gcloud sql instances describe griffin-dev-db >/dev/null 2>&1; then
   ok "instance griffin-dev-db already exists"
 else
   info "creating MySQL instance (this takes 2-4 minutes)..."
-  if ! gcloud sql instances create griffin-dev-db \
+  if ! run_live "$WORKDIR/sql-create.log" gcloud sql instances create griffin-dev-db \
         --database-version="$SQL_VERSION" --region="$REGION" \
-        --root-password="$SQL_ROOT_PASSWORD" --quiet >/dev/null 2>&1; then
+        --root-password="$SQL_ROOT_PASSWORD" --quiet; then
     warn "$SQL_VERSION was rejected, retrying with MYSQL_8_0"
     SQL_VERSION="MYSQL_8_0"
-    gcloud sql instances create griffin-dev-db \
+    run_live "$WORKDIR/sql-create.log" gcloud sql instances create griffin-dev-db \
       --database-version="$SQL_VERSION" --region="$REGION" \
-      --root-password="$SQL_ROOT_PASSWORD" --quiet >/dev/null 2>&1 \
+      --root-password="$SQL_ROOT_PASSWORD" --quiet \
       && ok "created griffin-dev-db ($SQL_VERSION)" \
       || note_fail "could not create griffin-dev-db"
   else
@@ -448,9 +480,9 @@ if gcloud container clusters describe "$CLUSTER" --zone "$ZONE" >/dev/null 2>&1;
   ok "cluster $CLUSTER already exists"
 else
   info "creating GKE cluster (5-10 minutes)..."
-  if gcloud container clusters create "$CLUSTER" \
+  if run_live "$WORKDIR/cluster-create.log" gcloud container clusters create "$CLUSTER" \
       --network griffin-dev-vpc --subnetwork griffin-dev-wp \
-      --machine-type e2-standard-4 --num-nodes 2 --zone "$ZONE" --quiet >/dev/null 2>&1; then
+      --machine-type e2-standard-4 --num-nodes 2 --zone "$ZONE" --quiet; then
     ok "created cluster $CLUSTER"
   else
     note_fail "could not create cluster $CLUSTER"

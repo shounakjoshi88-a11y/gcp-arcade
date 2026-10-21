@@ -464,10 +464,9 @@ else
 
   info "creating the deployment '$DEPLOYMENT' (this takes a few minutes)"
   DM_OUT="$WORKDIR/dm.log"
-  if gcloud deployment-manager deployments create "$DEPLOYMENT" \
+  if run_live "$DM_OUT" gcloud deployment-manager deployments create "$DEPLOYMENT" \
         --config="$WORKDIR/lamp.yaml" --project="$PROJECT_ID" \
-        --labels="marketplace-suppress-benign-warnings=true" \
-        > "$DM_OUT" 2>&1; then
+        --labels="marketplace-suppress-benign-warnings=true"; then
     ok "deployment $DEPLOYMENT created"
   elif grep -qi "already exists" "$DM_OUT"; then
     warn "deployment $DEPLOYMENT already exists - updating it instead"
