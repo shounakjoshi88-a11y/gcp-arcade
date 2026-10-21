@@ -1,7 +1,3 @@
-HTTP 200 OK
-content-length: 8855
-content-type: text/plain; charset=utf-8
-
 # Monitor Resources with Google Cloud Observability — task by task
 
 Manual equivalent of `gsp_observability.sh`. Assumes Cloud Shell with the lab

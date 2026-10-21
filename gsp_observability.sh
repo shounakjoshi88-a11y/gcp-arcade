@@ -1,7 +1,3 @@
-HTTP 200 OK
-content-length: 12000
-content-type: text/plain; charset=utf-8
-
 #!/usr/bin/env bash
 # =============================================================================
 #  "Monitor Resources with Google Cloud Observability"
@@ -333,11 +329,7 @@ EOF
 
   if gcloud monitoring dashboards create --config-from-file="$WORKDIR/dashboard.json" \
        --project "$PROJECT_ID" --quiet >/dev/null 2>&1; then
-    ok "created thHTTP 200 OK
-content-length: 12000
-content-type: text/plain; charset=utf-8
-
-e dashboard '$DASHBOARD_NAME' with a chart called 'My Chart'"
+    ok "created the dashboard '$DASHBOARD_NAME' with a chart called 'My Chart'"
   else
     info "trying the REST API instead"
     RESP="$(curl -s -X POST "$API/v1/projects/$PROJECT_ID/dashboards" \
@@ -637,11 +629,7 @@ task5() {
     {
       "displayName": "Uptime check failed",
       "conditionThreshold": {
-       HTTP 200 OK
-content-length: 3637
-content-type: text/plain; charset=utf-8
-
- "filter": "metric.type = \\"monitoring.googleapis.com/uptime_check/check_passed\\" AND metric.label.check_id = \\"$UPTIME_ID\\"",
+        "filter": "metric.type = \\"monitoring.googleapis.com/uptime_check/check_passed\\" AND metric.label.check_id = \\"$UPTIME_ID\\"",
         "aggregations": [
           {
             "alignmentPeriod": "60s",

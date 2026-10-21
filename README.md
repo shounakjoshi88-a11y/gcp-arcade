@@ -1,7 +1,3 @@
-HTTP 200 OK
-content-length: 12059
-content-type: text/plain; charset=utf-8
-
 # gcp-arcade
 
 Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
@@ -256,11 +252,7 @@ Want the lab's verbatim HashiCorp apt-repository method instead?
 | `--region REGION` | `gcloud config compute/region` | Region (informational) |
 | `--image IMAGE` | auto-detected Debian image | Boot disk image |
 | `--machine-type T` | `e2-medium` | Machine type |
-| `--name NAME` |HTTP 200 OK
-content-length: 12036
-content-type: text/plain; charset=utf-8
-
- `terraform` | Instance name |
+| `--name NAME` | `terraform` | Instance name |
 | `--workdir PATH` | `$HOME/gsp156` | Where `instance.tf` lives |
 | `--install-method M` | `binary` | `binary` or `apt` |
 | `--destroy` | off | Destroy the infrastructure and exit |
@@ -599,11 +591,7 @@ project, so the script asks for both:
 
 ```
   Zone 1  [us-central1-a]:
-  Zone 2  [us-west1-b]HTTP 200 OK
-content-length: 12056
-content-type: text/plain; charset=utf-8
-
-:
+  Zone 2  [us-west1-b]:
 ```
 
 The regions are derived from the zones, because the lab's `default_region` is
@@ -925,11 +913,7 @@ Some reference scripts create the VM with `--metadata=enable-oslogin=true`.
 With OS Login enabled, `gcloud compute ssh` and `gcloud compute scp` use the
 OS Login flow, which needs the **`roles/iam.osLogin`** permission — and a lab
 student account usually does not have it. Both commands then fail with a
-permissions error, even thouHTTP 200 OK
-content-length: 12064
-content-type: text/plain; charset=utf-8
-
-gh the console's **SSH** button works (it uses the
+permissions error, even though the console's **SSH** button works (it uses the
 classic metadata-based key).
 
 The script creates the VM **without** that metadata item, and if it finds an
@@ -1244,11 +1228,7 @@ nohup ./cloud_sql_proxy -instances=$CONNECTION_NAME=tcp:3306 > proxy.log 2>&1 &
 - **Prints the browser steps** for both WordPress front ends, with the right
   database host filled in — `127.0.0.1` for the proxy one and the Cloud SQL
   private IP for the other. The WordPress setup is a web form, so that part
-  cannot bHTTP 200 OK
-content-length: 12078
-content-type: text/plain; charset=utf-8
-
-e scripted.
+  cannot be scripted.
 
 ### Options
 
@@ -1567,11 +1547,7 @@ not a bug.
 ```
 gsp321.sh             # GSP321 - Develop Your Google Cloud Network
 gsp156.sh             # GSP156 - Terraform Fundamentals
-gsp345.sh             # GSP345 - Build Infrastructure with Terraform: Challenge LHTTP 200 OK
-content-length: 2684
-content-type: text/plain; charset=utf-8
-
-ab
+gsp345.sh             # GSP345 - Build Infrastructure with Terraform: Challenge Lab
 gsp_marketplace.sh    # Deploy a LAMP Stack with Google Cloud Marketplace
 gsp_vpc.sh            # Get Started with VPC Networking and Compute Engine
 gsp_vpc_networks.sh    # Create and Configure VPC Networks
