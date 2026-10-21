@@ -16,15 +16,18 @@
 #     --email EMAIL     the address for the notification channel
 #     --zone ZONE       the zone of the lab's VMs (detected)
 #     --group-filter F  the exact filter for the resource group
-#     --task N          run only task N (2-6)
+#     --task N          run only one step of the script:
+#                       1 check the resources   2 dashboard
+#                       3 alert policy          4 resource group
+#                       5 uptime check          6 disable the policy
 #     --yes             do not pause for the checkpoints
 #     -h, --help        this help
 #
 #  CHECKPOINTS (100 points, 25 each):
-#     1. Create custom dashboard
-#     2. Create alerting policies
-#     3. Create Resource Group
-#     4. Create uptime check
+#     1. Create custom dashboard          (script step 2)
+#     2. Create alerting policies         (script step 3)
+#     3. Create Resource Group            (script step 4)
+#     4. Create uptime check              (script step 5)
 #
 #  NOTES:
 #   * The dashboard has to be a classic one - a mosaicLayout with tiles.
@@ -87,7 +90,8 @@ OPTIONS:
    --email EMAIL     the address for the notification channel
    --zone ZONE       the zone of the lab's VMs (detected)
    --group-filter F  the exact filter for the resource group
-   --task N          run only task N (2-6)
+   --task N          run only one step: 1 resources  2 dashboard
+                      3 alert policy  4 resource group  5 uptime  6 disable
    --yes             do not pause for the checkpoints
    -h, --help        this help
 USAGE_END
