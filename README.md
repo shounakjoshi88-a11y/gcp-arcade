@@ -1,3 +1,7 @@
+HTTP 200 OK
+content-length: 12059
+content-type: text/plain; charset=utf-8
+
 # gcp-arcade
 
 Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
@@ -252,7 +256,11 @@ Want the lab's verbatim HashiCorp apt-repository method instead?
 | `--region REGION` | `gcloud config compute/region` | Region (informational) |
 | `--image IMAGE` | auto-detected Debian image | Boot disk image |
 | `--machine-type T` | `e2-medium` | Machine type |
-| `--name NAME` | `terraform` | Instance name |
+| `--name NAME` |HTTP 200 OK
+content-length: 12036
+content-type: text/plain; charset=utf-8
+
+ `terraform` | Instance name |
 | `--workdir PATH` | `$HOME/gsp156` | Where `instance.tf` lives |
 | `--install-method M` | `binary` | `binary` or `apt` |
 | `--destroy` | off | Destroy the infrastructure and exit |
@@ -591,7 +599,11 @@ project, so the script asks for both:
 
 ```
   Zone 1  [us-central1-a]:
-  Zone 2  [us-west1-b]:
+  Zone 2  [us-west1-b]HTTP 200 OK
+content-length: 12056
+content-type: text/plain; charset=utf-8
+
+:
 ```
 
 The regions are derived from the zones, because the lab's `default_region` is
@@ -913,7 +925,11 @@ Some reference scripts create the VM with `--metadata=enable-oslogin=true`.
 With OS Login enabled, `gcloud compute ssh` and `gcloud compute scp` use the
 OS Login flow, which needs the **`roles/iam.osLogin`** permission — and a lab
 student account usually does not have it. Both commands then fail with a
-permissions error, even though the console's **SSH** button works (it uses the
+permissions error, even thouHTTP 200 OK
+content-length: 12064
+content-type: text/plain; charset=utf-8
+
+gh the console's **SSH** button works (it uses the
 classic metadata-based key).
 
 The script creates the VM **without** that metadata item, and if it finds an
@@ -1228,7 +1244,11 @@ nohup ./cloud_sql_proxy -instances=$CONNECTION_NAME=tcp:3306 > proxy.log 2>&1 &
 - **Prints the browser steps** for both WordPress front ends, with the right
   database host filled in — `127.0.0.1` for the proxy one and the Cloud SQL
   private IP for the other. The WordPress setup is a web form, so that part
-  cannot be scripted.
+  cannot bHTTP 200 OK
+content-length: 12078
+content-type: text/plain; charset=utf-8
+
+e scripted.
 
 ### Options
 
@@ -1318,47 +1338,40 @@ chmod +x gsp_observability.sh
 
 | # | Checkpoint | What the script does |
 |---|---|---|
-| 1 | Create custom dashboard | `My Dashboard` with a `gridLayout` and a line chart of CPU utilization ⏸ |
+| 1 | Create custom dashboard | `My Dashboard` with a `mosaicLayout` and a line chart of CPU utilization ⏸ |
 | 2 | Create alerting policies | an email notification channel and `My Alert Policy` with two conditions ANDed ⏸ |
 | 3 | Create Resource Group | `VM instances`, with the filter checked against the real member list ⏸ |
 | 4 | Create uptime check | `My Uptime check` on the group, plus an alert policy for it ⏸ |
 
 Then it disables the alert policy, which is what the lab's last task asks for.
 
-### The dashboard has to use a gridLayout
-
-A dashboard with any other layout is **accepted by the API, shows up in the
-console, and still scores 0** — and the console form never hints that the
-layout is what is being graded. This is the most common way to lose points on
-this lab, so the script uses `gridLayout` explicitly.
-
 ### The group needs the console's own filter
 
-The lab's criterion is *Value: nginx*, and the console turns that into
-exactly:
+The lab's criterion is *Value: nginx* — in the console's **Contains**
+operator — and the console turns that into exactly:
 
 ```
-resource.type = "gce_instance" AND resource.metadata.name = starts_with("nginx")
+resource.metadata.name = has_substring("nginx")
 ```
 
 The lab grades the group's **configuration** — a group with any other filter
 scores **0**, even though the API accepts it and it appears in the console.
-That includes "cleverer" filters: the API only accepts `project`,
-`resource.type`, `resource.labels.KEY`, `metadata.system_labels.KEY` and
-`metadata.user_labels.KEY` as filter objects, and the `gce_instance`
-monitored resource has no `name` label at all, so a name-based filter
-matches nothing.
+Note what is *not* in it: no `resource.type = "gce_instance" AND` prefix,
+and `has_substring`, not `starts_with`.
 
 The member list is a red herring: it is filled in by a background evaluation
 and can be empty for a minute or two after the group is created. The
 checkpoint looks at the configuration, not the members.
 
-### The dashboard is rebuilt every time
+### The dashboard has to be a classic one
 
-A dashboard with any other layout — or one that came from the console, or
-from an earlier run — is accepted by the API, shows up in the console, and
-still scores **0**. So the script deletes any dashboard with that name and
-creates it again with a `gridLayout`.
+The console creates a **classic** dashboard, which means a `mosaicLayout` with
+`tiles`. A `gridLayout` dashboard — the newer shape — is accepted by the API,
+shows up in the console, and still scores **0**, because the lab looks for the
+chart in the classic shape.
+
+The script deletes any dashboard with that name and creates it again in the
+shape the console itself produces, every time.
 
 ### One shell trap worth knowing
 
@@ -1554,7 +1567,11 @@ not a bug.
 ```
 gsp321.sh             # GSP321 - Develop Your Google Cloud Network
 gsp156.sh             # GSP156 - Terraform Fundamentals
-gsp345.sh             # GSP345 - Build Infrastructure with Terraform: Challenge Lab
+gsp345.sh             # GSP345 - Build Infrastructure with Terraform: Challenge LHTTP 200 OK
+content-length: 2684
+content-type: text/plain; charset=utf-8
+
+ab
 gsp_marketplace.sh    # Deploy a LAMP Stack with Google Cloud Marketplace
 gsp_vpc.sh            # Get Started with VPC Networking and Compute Engine
 gsp_vpc_networks.sh    # Create and Configure VPC Networks
