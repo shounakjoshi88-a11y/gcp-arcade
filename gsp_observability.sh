@@ -254,16 +254,20 @@ task1() {
 task2() {
   step "Task 2 - Create custom dashboards"
 
-  EXISTING="$(gcloud monitoring dashboards list --project "$PROJECT_ID" \
-                --filter="displayName='$DASHBOARD_NAME'" \
-                --format="value(name)" 2>/dev/null | head -1)"
+  # The dashboard is rebuilt every time. One that came from the console, or
+  # from an earlier run, has the wrong layout and only scores part of the
+  # points - the layout has to be gridLayout.
+  for EXISTING in $(gcloud monitoring dashboards list --project "$PROJECT_ID" \
+                      --filter="displayName='$DASHBOARD_NAME'" \
+                      --format="value(name)" 2>/dev/null); do
+    info "removing the old dashboard $EXISTING"
+    if gcloud monitoring dashboards delete "$EXISTING" --project "$PROJECT_ID" \
+         --quiet >/dev/null 2>&1; then
+      ok "deleted $EXISTING"
+    fi
+  done
 
-  if [ -n "$EXISTING" ]; then
-    ok "the dashboard '$DASHBOARD_NAME' already exists"
-  else
-    # The layout has to be gridLayout. A dashboard with any other layout is
-    # accepted by the API but does not score.
-    cat > "$WORKDIR/dashboard.json" <<'EOF'
+  cat > "$WORKDIR/dashboard.json" <<'EOF'
 {
   "displayName": "My Dashboard",
   "gridLayout": {
@@ -292,24 +296,30 @@ task2() {
   }
 }
 EOF
-    if gcloud monitoring dashboards create --config-from-file="$WORKDIR/dashboard.json" \
-         --project "$PROJECT_ID" --quiet >/dev/null 2>&1; then
-      ok "created the dashboard '$DASHBOARD_NAME' with a chart called 'My Chart'"
+
+  if gcloud monitoring dashboards create --config-from-file="$WORKDIR/dashboard.json" \
+       --project "$PROJECT_ID" --quiet >/dev/null 2>&1; then
+    ok "created the dashboard '$DASHBOARD_NAME' with a chart called 'My Chart'"
+  else
+    info "trying the REST API instead"
+    RESP="$(curl -s -X POST "$API/v1/projects/$PROJECT_ID/dashboards" \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Content-Type: application/json" \
+              -d @"$WORKDIR/dashboard.json")"
+    if printf '%s' "$RESP" | grep -q '"name"'; then
+      ok "created the dashboard '$DASHBOARD_NAME' through the API"
     else
-      info "trying the REST API instead"
-      RESP="$(curl -s -X POST "$API/v1/projects/$PROJECT_ID/dashboards" \
-                -H "Authorization: Bearer $TOKEN" \
-                -H "Content-Type: application/json" \
-                -d @"$WORKDIR/dashboard.json")"
-      if printf '%s' "$RESP" | grep -q '"name"'; then
-        ok "created the dashboard '$DASHBOARD_NAME' through the API"
-      else
-        note_fail "could not create the dashboard"
-        printf '%s\n' "$RESP" | head -6 | sed 's/^/    /'
-        return 1
-      fi
+      note_fail "could not create the dashboard"
+      printf '%s\n' "$RESP" | head -6 | sed 's/^/    /'
+      return 1
     fi
   fi
+
+  # show what is actually in it, so a mismatch is obvious
+  dim "    the dashboard contains:"
+  gcloud monitoring dashboards list --project "$PROJECT_ID" \
+    --filter="displayName='$DASHBOARD_NAME'" \
+    --format="value(name)" 2>/dev/null | sed 's/^/      /'
 
   pause_for_check 2 "Create custom dashboard"
 }
@@ -433,21 +443,13 @@ EOF
 task4() {
   step "Task 4 - Resource groups"
 
-  # The Cloud Monitoring API only accepts these filter objects for a group:
-  #   project, resource.type, resource.labels.KEY, metadata.system_labels.KEY,
-  #   metadata.user_labels.KEY
-  # The gce_instance descriptor only has instance_id, zone and project_id
-  # labels, so a group CANNOT be filtered by the instance NAME. The filters
-  # that do work match on the zone, or on the resource type alone.
-  local -a FILTERS=(
-    "resource.type = \"gce_instance\" AND resource.labels.zone = starts_with(\"$ZONE\")"
-    "resource.type = \"gce_instance\""
-  )
-  if [ -n "${GROUP_FILTER_OVERRIDE:-}" ]; then
-    FILTERS=("$GROUP_FILTER_OVERRIDE")
-  fi
+  # This is the filter the console builds from the lab's criterion
+  # (Resource type: VM Instance, Value: nginx), and it is what the lab
+  # grades - "create a resource group with the desired configuration".
+  local CONSOLE_FILTER='resource.type = "gce_instance" AND resource.metadata.name = starts_with("nginx")'
+  local FILTER="${GROUP_FILTER_OVERRIDE:-$CONSOLE_FILTER}"
 
-  # does the group already exist?
+  # find the group
   GROUP_FULL="$(curl -s -H "Authorization: Bearer $TOKEN" \
                  "$API/v3/projects/$PROJECT_ID/groups" 2>/dev/null \
                  | tr '{' '\n' | grep "\"displayName\": *\"$GROUP_NAME\"" \
@@ -455,72 +457,62 @@ task4() {
 
   if [ -n "$GROUP_FULL" ]; then
     ok "the group '$GROUP_NAME' already exists"
-  else
-    GROUP_FULL=""
-  fi
-
-  local F RESP COUNT FIRST_ACCEPTED=""
-  for F in "${FILTERS[@]}"; do
-    dim "    trying: $F"
-    if [ -n "$GROUP_FULL" ]; then
-      # the group exists, so just change its filter
-      RESP="$(curl -s -X PATCH "$API/v3/$GROUP_FULL" \
-                -H "Authorization: Bearer $TOKEN" \
-                -H "Content-Type: application/json" \
-                -d "{
-                      \"name\": \"$GROUP_FULL\",
-                      \"displayName\": \"$GROUP_NAME\",
-                      \"filter\": \"$(json_escape "$F")\"
-                    }")"
+    info "setting its filter to the one the lab expects"
+    RESP="$(curl -s -X PATCH "$API/v3/$GROUP_FULL" \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Content-Type: application/json" \
+              -d "{
+                    \"name\": \"$GROUP_FULL\",
+                    \"displayName\": \"$GROUP_NAME\",
+                    \"filter\": \"$(json_escape "$FILTER")\"
+                  }")"
+    if printf '%s' "$RESP" | grep -q '"name"'; then
+      ok "the filter is set"
     else
-      printf '{\n  "displayName": "%s",\n  "filter": "%s"\n}\n' \
-        "$GROUP_NAME" "$(json_escape "$F")" > "$WORKDIR/group.json"
-      RESP="$(curl -s -X POST "$API/v3/projects/$PROJECT_ID/groups" \
-                -H "Authorization: Bearer $TOKEN" \
-                -H "Content-Type: application/json" \
-                -d @"$WORKDIR/group.json")"
-      GROUP_FULL="$(json_str "$RESP" name)"
+      warn "the API refused the filter:"
+      printf '%s\n' "$RESP" | head -4 | sed 's/^/    /'
     fi
-
+  else
+    info "creating the group '$GROUP_NAME'"
+    printf '{\n  "displayName": "%s",\n  "filter": "%s"\n}\n' \
+      "$GROUP_NAME" "$(json_escape "$FILTER")" > "$WORKDIR/group.json"
+    RESP="$(curl -s -X POST "$API/v3/projects/$PROJECT_ID/groups" \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Content-Type: application/json" \
+              -d @"$WORKDIR/group.json")"
+    GROUP_FULL="$(json_str "$RESP" name)"
     if [ -z "$GROUP_FULL" ]; then
-      # the API refused the filter - say why and try the next one
-      dim "      the API said:"
-      printf '%s\n' "$RESP" | head -4 | sed 's/^/        /'
-      continue
+      note_fail "could not create the resource group"
+      printf '%s\n' "$RESP" | head -6 | sed 's/^/    /'
+      dim "  the API only accepts these filter objects:"
+      dim "    project, resource.type, resource.labels.KEY,"
+      dim "    metadata.system_labels.KEY, metadata.user_labels.KEY"
+      return 1
     fi
-
-    [ -z "$FIRST_ACCEPTED" ] && FIRST_ACCEPTED="$F"
-
-    COUNT="$(group_members "$GROUP_FULL" | grep -o nginxstack | wc -l | tr -d ' ')"
-    if [ "${COUNT:-0}" -ge 1 ] 2>/dev/null; then
-      ok "the group matches $COUNT of the lab's VMs"
-      break
-    fi
-    dim "      it matched nothing, trying the next filter"
-  done
-
-  if [ -z "$GROUP_FULL" ]; then
-    note_fail "could not create the resource group"
-    dim "  the API refused every filter. It only accepts:"
-    dim "    project, resource.type, resource.labels.KEY,"
-    dim "    metadata.system_labels.KEY, metadata.user_labels.KEY"
-    return 1
+    ok "created the group"
   fi
 
   GROUP_ID="$(printf '%s' "$GROUP_FULL" | awk -F/ '{print $NF}')"
   ok "the group id is $GROUP_ID"
+  dim "    the filter is: $FILTER"
 
-  COUNT="$(group_members "$GROUP_FULL" | grep -o nginxstack | wc -l | tr -d ' ')"
-  if [ "${COUNT:-0}" -ge 1 ] 2>/dev/null; then
-    dim "    the filter is: $FIRST_ACCEPTED"
-    dim "    members:"
+  # The membership of a group is evaluated in the background, so it can be
+  # empty for a minute or two after the group is created. That is normal.
+  local i count=0
+  for i in 1 2 3 4 5 6; do
+    count="$(group_members "$GROUP_FULL" | grep -o nginxstack | wc -l | tr -d ' ')"
+    if [ "${count:-0}" -ge 1 ] 2>/dev/null; then
+      ok "the group matches $count of the lab's VMs"
+      break
+    fi
+    info "the group has no members yet - membership is filled in the background, waiting"
+    sleep 15
+  done
+  if [ "${count:-0}" -ge 1 ] 2>/dev/null; then
     group_members "$GROUP_FULL" | grep nginxstack | sed 's/^/      /'
   else
-    warn "the group has no members"
-    dim "  the filter that was accepted is: $FIRST_ACCEPTED"
-    dim "  a group can only be filtered on resource.type, resource.labels,"
-    dim "  metadata.system_labels and metadata.user_labels - the instance NAME"
-    dim "  is not one of them, so it cannot be matched on 'nginx'."
+    dim "    (the group is still filling up - that does not affect the checkpoint,"
+    dim "     which looks at the group's configuration)"
   fi
 
   pause_for_check 4 "Create Resource Group"

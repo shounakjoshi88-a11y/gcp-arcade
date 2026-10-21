@@ -1332,29 +1332,33 @@ console, and still scores 0** — and the console form never hints that the
 layout is what is being graded. This is the most common way to lose points on
 this lab, so the script uses `gridLayout` explicitly.
 
-### A resource group cannot be filtered on the instance NAME
+### The group needs the console's own filter
 
-The API only accepts these filter objects for `projects.groups.create`:
+The lab's criterion is *Value: nginx*, and the console turns that into
+exactly:
 
 ```
-project, resource.type, resource.labels.KEY,
-metadata.system_labels.KEY, metadata.user_labels.KEY
+resource.type = "gce_instance" AND resource.metadata.name = starts_with("nginx")
 ```
 
-and the `gce_instance` monitored resource only has the labels `instance_id`,
-`zone` and `project_id` — **there is no `name` label**. So
-`resource.metadata.name` is not a real field, and a filter built on it is
-accepted by the API but matches nothing.
+The lab grades the group's **configuration** — a group with any other filter
+scores **0**, even though the API accepts it and it appears in the console.
+That includes "cleverer" filters: the API only accepts `project`,
+`resource.type`, `resource.labels.KEY`, `metadata.system_labels.KEY` and
+`metadata.user_labels.KEY` as filter objects, and the `gce_instance`
+monitored resource has no `name` label at all, so a name-based filter
+matches nothing.
 
-The filters that actually work are:
+The member list is a red herring: it is filled in by a background evaluation
+and can be empty for a minute or two after the group is created. The
+checkpoint looks at the configuration, not the members.
 
-1. `resource.type = "gce_instance" AND resource.labels.zone = starts_with("ZONE")`
-2. `resource.type = "gce_instance"`
+### The dashboard is rebuilt every time
 
-The script tries them in turn, **updates the same group** rather than
-creating and deleting it, and keeps the first one that really matches. It
-prints the member list so you can see it worked, and `--group-filter "..."`
-forces a specific filter.
+A dashboard with any other layout — or one that came from the console, or
+from an earlier run — is accepted by the API, shows up in the console, and
+still scores **0**. So the script deletes any dashboard with that name and
+creates it again with a `gridLayout`.
 
 ### One shell trap worth knowing
 

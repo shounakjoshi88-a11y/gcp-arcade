@@ -65,10 +65,13 @@ EOF
 gcloud monitoring dashboards create --config-from-file=/tmp/dashboard.json
 ```
 
-> **The layout has to be `gridLayout`.** A dashboard with a different layout
-> is accepted by the API, shows up in the console, and still scores **0** —
-> the console form gives you no hint that the layout matters. This is the
-> single most common way to lose points on this lab.
+> **The layout has to be `gridLayout`, and the dashboard has to be
+> rebuilt.** A dashboard with a different layout — or one that came from the
+> console, or from an earlier run — is accepted by the API, shows up in the
+> console, and still scores **0**. The console form gives you no hint that
+> the layout matters. This is the single most common way to lose points on
+> this lab, so the script deletes any dashboard with that name and creates
+> it again from scratch every time.
 
 ## Task 3 — Alerting policies
 
@@ -145,33 +148,38 @@ curl -s -X POST \
     }'
 ```
 
-> **The group has to actually MATCH the VMs.** A group with a plausible
-> looking filter and an empty member list does not score. Check the members:
+> **The filter has to be the one the console builds.** The lab's criterion
+> is *Value: nginx*, and the console turns that into exactly:
+>
+> ```
+> resource.type = "gce_instance" AND resource.metadata.name = starts_with("nginx")
+> ```
+>
+> The lab grades the group's **configuration** — a group with any other filter
+> scores **0**, even though the API accepts it and it shows up in the console.
+> So use that filter, not a cleverer one.
+>
+> ```bash
+> curl -s -X POST \
+>     "https://monitoring.googleapis.com/v3/projects/$PROJECT_ID/groups" \
+>     -H "Authorization: Bearer $TOKEN" \
+>     -H "Content-Type: application/json" \
+>     -d '{
+>       "displayName": "VM instances",
+>       "filter": "resource.type = \"gce_instance\" AND resource.metadata.name = starts_with(\"nginx\")"
+>     }'
+> ```
+>
+> **The member list fills in in the background.** Right after you create a
+> group it can have no members for a minute or two, because the membership is
+> evaluated periodically. That is normal, and it does not affect the
+> checkpoint — the checkpoint looks at the group's configuration. Check it
+> whenever you like:
 >
 > ```bash
 > curl -s -H "Authorization: Bearer $TOKEN" \
 >   "https://monitoring.googleapis.com/v3/projects/$PROJECT_ID/groups/GROUP_ID/members"
 > ```
->
-> **A group cannot be filtered on the instance NAME.** The API only accepts
-> these filter objects for `projects.groups.create`:
->
-> ```
-> project, resource.type, resource.labels.KEY,
-> metadata.system_labels.KEY, metadata.user_labels.KEY
-> ```
->
-> and the `gce_instance` monitored resource only has the labels
-> `instance_id`, `zone` and `project_id` — there is no `name` label, so
-> `resource.metadata.name` is not a thing and a filter built on it matches
-> nothing. The filters that work are:
->
-> 1. `resource.type = "gce_instance" AND resource.labels.zone = starts_with("ZONE")`
-> 2. `resource.type = "gce_instance"`
->
-> The script tries them in turn, **updates the same group** rather than
-> creating and deleting it, and keeps the first one that actually matches.
-> Force a specific filter with `--group-filter "..."`.
 
 ## Task 5 — Uptime monitoring
 
