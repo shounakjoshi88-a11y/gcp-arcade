@@ -1545,4 +1545,49 @@ not a bug.
 gsp321.sh             # GSP321 - Develop Your Google Cloud Network
 gsp156.sh             # GSP156 - Terraform Fundamentals
 gsp345.sh             # GSP345 - Build Infrastructure with Terraform: Challenge Lab
-gsp_marketplace.sh    # Deploy a LAMP Stack with Google Cloud Ma
+gsp_marketplace.sh    # Deploy a LAMP Stack with Google Cloud Marketplace
+gsp_vpc.sh            # Get Started with VPC Networking and Compute Engine
+gsp_vpc_networks.sh    # Create and Configure VPC Networks
+gsp_pga_nat.sh         # Implement Private Google Access and Cloud NAT
+gsp_create_vms.sh      # Create Virtual Machines
+gsp_minecraft.sh        # Create and Configure Virtual Machines - Minecraft server
+gsp_iam.sh              # Exploring IAM
+gsp_storage_buckets.sh   # Cloud Storage buckets and encryption
+gsp_configure_sql.sh      # Configure Cloud SQL
+gsp_bigquery_billing.sh   # Examine Billing data with BigQuery
+gsp_observability.sh      # Monitor resources with Cloud Observability
+gsp_storagesql.sh     # Getting Started with Cloud Storage and Cloud SQL
+gsp_cloudrun.sh       # Hello Cloud Run
+gsp_console_shell.sh  # Explore the Google Cloud Console and Cloud Shell
+TASKS.md              # GSP321, task by task, for manual runs
+TASKS156.md           # GSP156, task by task, for manual runs
+TASKS345.md           # GSP345, task by task, for manual runs
+TASKS_marketplace.md  # Deploy a LAMP Stack with Cloud Marketplace, by hand
+TASKS_vpc_networks.md  # Create and Configure VPC Networks, by hand
+TASKS_pga_nat.md       # Private Google Access and Cloud NAT, by hand
+TASKS_create_vms.md    # Create Virtual Machines, by hand
+TASKS_minecraft.md      # Create and Configure Virtual Machines, by hand
+TASKS_iam.md            # Exploring IAM, by hand
+TASKS_storage_buckets.md # Cloud Storage buckets and encryption, by hand
+TASKS_configure_sql.md   # Configure Cloud SQL, by hand
+TASKS_bigquery_billing.md # Examine Billing data with BigQuery, by hand
+TASKS_observability.md    # Cloud Observability, by hand
+TASKS_storagesql.md   # Cloud Storage and Cloud SQL, task by task, for manual runs
+TASKS_cloudrun.md     # Hello Cloud Run, task by task, for manual runs
+TASKS_console_shell.md # Explore the Google Cloud Console and Cloud Shell, by hand
+README.md             # this file
+LICENSE               # MIT
+```
+
+## Credits
+
+Lab content and manifests come from the public `gs://spls/gsp321/` bucket
+(current) and `gs://cloud-training/gsp321/` (older). The original one-shot
+script for GSP321 was published by PerkVerse for Google Cloud Arcade; this
+repo is a corrected, idempotent rewrite that fixes the uptime-check race
+condition and the IAM role replacement.
+
+> **Reminder:** these provision real billable GCP resources — a GKE cluster, a
+> Cloud SQL instance, a load balancer, a VM. Tear them down when you're done:
+> `./gsp321.sh` resources can be removed with the `gcloud` commands in
+> `TASKS.md`, and `./gsp156.sh --destroy` removes the Terraform-managed VM.
