@@ -21,6 +21,7 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp_storagesql.sh`](./gsp_storagesql.sh) | **Cloud Storage and Cloud SQL** — Getting Started | Web server VM, public bucket, Cloud SQL instance, and the PHP page wired to both | 100/100 |
 | [`gsp_cloudrun.sh`](./gsp_cloudrun.sh) | **Hello Cloud Run** | Node.js app, Artifact Registry repo, container image, and the Cloud Run deployment | 100/100 |
 | [`gsp_console_shell.sh`](./gsp_console_shell.sh) | **Explore the Google Cloud Console and Cloud Shell** | The console bucket, the Cloud Shell bucket, the file upload, and the persistent environment variables | — |
+| [`gsp_ha_vpn.sh`](./gsp_ha_vpn.sh) | **Configure Google Cloud HA VPN** | The two VPCs, the HA VPN gateways, the Cloud Routers, the four tunnels, the BGP peering and global dynamic routing | — |
 
 *Score* is what the lab console reported after running the script.
 
@@ -1540,6 +1541,102 @@ not a bug.
 
 ---
 
+## Configure Google Cloud HA VPN
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_ha_vpn.sh
+chmod +x gsp_ha_vpn.sh
+./gsp_ha_vpn.sh
+```
+
+| Task | What the script does |
+|---|---|
+| 1 | `vpc-demo` in custom mode, `vpc-demo-subnet1` (`10.1.1.0/24`) and `vpc-demo-subnet2` (`10.2.1.0/24`) in the two regions, the two firewall rules and the two VMs ⏸ |
+| 2 | `on-prem`, `on-prem-subnet1` (`192.168.1.0/24`), its two firewall rules and `on-prem-instance1` ⏸ |
+| 3 | the two HA VPN gateways, `vpc-demo-vpn-gw1` and `on-prem-vpn-gw1` ⏸ |
+| 4 | the two Cloud Routers, `vpc-demo-router1` (asn 65001) and `on-prem-router1` (asn 65002) ⏸ |
+| 5 | the four tunnels, interface 0 to 0 and interface 1 to 1 ⏸ |
+| 6 | the four router interfaces and the four BGP peers ⏸ |
+| 7 | `vpc-demo-allow-subnets-from-on-prem` and `on-prem-allow-subnets-from-vpc-demo` ⏸ |
+| 8 | global dynamic routing on `vpc-demo` ⏸ |
+| 9 | waits for the tunnels and the BGP sessions, then pings both VMs from `on-prem-instance1` ⏸ |
+
+### The two regions and the three zones are lab-assigned
+
+They change on every lab run and cannot be read from the project. The script
+takes them from the shell the lab starts — Arcade exports `ZONE`, `ZONE_1`
+and `ZONE_2` — and asks for whatever is missing:
+
+```
+  Zone 1 - vpc-demo-instance1 (in REGION 1) [us-central1-a]:
+  Zone 2 - vpc-demo-instance2 (in REGION 2) [us-east1-b]:
+  Zone 3 - on-prem-instance1   (in REGION 1) [us-central1-b]:
+```
+
+The regions are derived from the zones, and the script warns when the two
+regions come out the same.
+
+### Everything HA VPN lives in one region
+
+A tunnel can only connect two gateways **in the same region**, so both
+gateways, both routers and all four tunnels go in REGION 1 — the region of
+the `on-prem` network. Putting the `on-prem` gateway in the other region is
+the classic way to lose this lab: the tunnel create call is rejected with a
+message that does not mention the region.
+
+### The interfaces have to match
+
+`vpc-demo-tunnel0` uses interface `0` and points at `on-prem-vpn-gw1`; on the
+other side `on-prem-tunnel0` also uses interface `0`. A crossed pair still
+creates fine and still reports `ESTABLISHED` — it just is not the topology
+the lab asks for, and the 99.99% SLA does not hold.
+
+### The shared secret is generated once and kept
+
+All four tunnels need the same IKE shared secret, and it has to be the same
+on both ends of each tunnel. The script generates one, writes it to
+`~/gsp-ha-vpn/shared_secret` and reuses it, so a re-run does not break the
+pair. `--secret` overrides it.
+
+### Global dynamic routing is what makes the second region reachable
+
+`vpc-demo` has a subnet in REGION 2. With the default regional routing, the
+Cloud Router in REGION 1 only advertises the subnets in its own region, so
+`vpc-demo-instance2` never answers a ping from `on-prem`:
+
+```bash
+gcloud compute networks update vpc-demo --bgp-routing-mode=GLOBAL
+```
+
+The lab asks for `vpc-demo`. The script also sets `on-prem` to `GLOBAL`,
+which the lab does not ask for: with regional routing the `on-prem` router
+would not advertise a subnet that sits in another region either.
+
+### The creates block for about a minute
+
+A gateway, a router, a tunnel and a VM all take roughly a minute, and a
+silent wait looks exactly like a hang. Those calls stream their output with
+a heartbeat, so the script never looks stuck.
+
+### Options
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--project ID` | active gcloud project | Target project |
+| `--region1 REGION` | from zone 1 | REGION 1 of the lab |
+| `--region2 REGION` | from zone 2 | REGION 2 of the lab |
+| `--zone1 ZONE` | `$ZONE` | Zone of `vpc-demo-instance1` |
+| `--zone2 ZONE` | `$ZONE_1` | Zone of `vpc-demo-instance2` |
+| `--zone3 ZONE` | `$ZONE_2` | Zone of `on-prem-instance1` |
+| `--secret S` | generated once | The IKE shared secret |
+| `--machine-type T` | `e2-medium` | The VM machine type |
+| `--task N` | all | Run only task N (1–9) |
+| `--yes` | off | Do not pause for the checkpoints |
+| `--no-verify` | off | Do not wait for the tunnels and skip the ping test |
+| `-h, --help` | | Usage |
+
+---
+
 ## Layout
 
 
@@ -1562,6 +1659,7 @@ gsp_observability.sh      # Monitor resources with Cloud Observability
 gsp_storagesql.sh     # Getting Started with Cloud Storage and Cloud SQL
 gsp_cloudrun.sh       # Hello Cloud Run
 gsp_console_shell.sh  # Explore the Google Cloud Console and Cloud Shell
+gsp_ha_vpn.sh          # Configure Google Cloud HA VPN
 TASKS.md              # GSP321, task by task, for manual runs
 TASKS156.md           # GSP156, task by task, for manual runs
 TASKS345.md           # GSP345, task by task, for manual runs
@@ -1578,6 +1676,7 @@ TASKS_observability.md    # Cloud Observability, by hand
 TASKS_storagesql.md   # Cloud Storage and Cloud SQL, task by task, for manual runs
 TASKS_cloudrun.md     # Hello Cloud Run, task by task, for manual runs
 TASKS_console_shell.md # Explore the Google Cloud Console and Cloud Shell, by hand
+TASKS_ha_vpn.md       # Configure Google Cloud HA VPN, by hand
 README.md             # this file
 LICENSE               # MIT
 ```
