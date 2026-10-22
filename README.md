@@ -1572,16 +1572,37 @@ takes them from the shell the lab starts — Arcade exports `ZONE`, `ZONE_1`
 and `ZONE_2` (or `Z1`, `Z2`, `Z3`) — and asks for whatever is missing:
 
 ```
-  Zone 1 - vpc-demo-instance1 (in REGION 1) [us-central1-a]:
-  Zone 2 - vpc-demo-instance2 (in REGION 2) [us-east1-b]:
-  Zone 3 - on-prem-instance1   (in REGION 1) [us-central1-b]:
+  Zone 1 - vpc-demo-instance1 [us-central1-a]:
+  Zone 2 - vpc-demo-instance2 [us-east1-b]:
+  Zone 3 - on-prem-instance1 (in REGION 1 = us-central1, not zone 1) [europe-west1-b]:
 ```
 
 The regions are derived from the zones, and the script warns when the two
-regions come out the same. `on-prem-instance1` also has to sit in a
-**different** zone from `vpc-demo-instance1` — the lab says so, and the API
-does not enforce it — so the script moves it to another zone of the same
-region when it has to.
+regions come out the same.
+
+### Every zone is checked against the API before it is used
+
+A lab project does not necessarily allow every zone, and a zone that cannot
+be fetched comes back as:
+
+```
+ERROR: (gcloud.compute.instances.create) Could not fetch resource:
+ - Permission denied on 'locations/europe-west1-a' (or it may not exist).
+```
+
+The instance create fails with that message, and it says nothing about the
+zone being the problem. So the script checks the zone first with
+`gcloud compute zones describe` and, when the project refuses it, offers the
+first zone of the region that *does* work:
+
+```
+  [WARN] this project cannot use the zone us-central1-b
+  Zone 3 - on-prem-instance1 (in REGION 1 = europe-west1, not zone 1) [europe-west1-b]:
+```
+
+The same check catches a zone from the wrong region, and the "not zone 1"
+rule for `on-prem-instance1` — the lab wants it in a different zone from
+`vpc-demo-instance1`, and the API does not enforce that.
 
 ### Everything HA VPN lives in one region
 

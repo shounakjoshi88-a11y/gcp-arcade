@@ -44,6 +44,12 @@
 #   * The lab injects the two regions and the three zones per run. The script
 #     reads them from the shell the lab starts (ZONE, ZONE_1, ZONE_2 or Z1,
 #     Z2, Z3) and asks for whatever is missing.
+#   * Every zone is checked against the API before it is used. A lab project
+#     does not necessarily allow every zone, and a zone that cannot be
+#     fetched comes back as
+#       Permission denied on 'locations/<zone>' (or it may not exist)
+#     The instance create fails with the same message, so the script checks
+#     the zone first and asks for another one when it is not usable.
 #   * Everything HA VPN lives in ONE region. The gateway, its router, the
 #     peer gateway and the tunnels all have to be in the same region or the
 #     tunnel create call is rejected. That region is REGION 1, the region of
@@ -154,6 +160,14 @@ fi
 WORKDIR="${WORKDIR:-$HOME/gsp-ha-vpn}"
 mkdir -p "$WORKDIR" 2>/dev/null || WORKDIR="."
 
+# The Compute Engine API has to be on before a zone can be checked.
+if ! command -v gcloud >/dev/null 2>&1; then
+  err "gcloud not found on PATH. Run this inside Google Cloud Shell."
+  exit 1
+fi
+gcloud config set project "$PROJECT_ID" >/dev/null 2>&1
+gcloud services enable compute.googleapis.com --quiet >/dev/null 2>&1
+
 # ---------------------------------------------------------------------------
 # the lab's regions and zones
 #
@@ -163,8 +177,11 @@ mkdir -p "$WORKDIR" 2>/dev/null || WORKDIR="."
 #   ZONE (Z1)  - the zone of vpc-demo-instance1
 #   ZONE_1 (Z2)- the zone of vpc-demo-instance2
 #   ZONE_2 (Z3)- the zone of on-prem-instance1
-# Whatever is missing is asked for. Every answer has a default, so pressing
-# Enter all the way through still produces a working topology.
+# Whatever is missing is asked for. Every answer is checked against the API
+# before it is used, because a lab project does not necessarily allow every
+# zone: a zone that cannot be fetched comes back as
+#   Permission denied on 'locations/<zone>' (or it may not exist)
+# and the instance create fails with the same message.
 # ---------------------------------------------------------------------------
 ask() {  # $1 = variable name, $2 = label, $3 = default
   local __name="$1" __label="$2" __default="$3" __ans=""
@@ -176,6 +193,93 @@ ask() {  # $1 = variable name, $2 = label, $3 = default
   printf -v "$__name" '%s' "${__ans:-$__default}"
 }
 
+# Can this project use the zone at all?
+zone_usable() {  # $1 = zone
+  gcloud compute zones describe "$1" --project "$PROJECT_ID" >/dev/null 2>&1
+}
+
+# The zones of a region, minus the ones this project cannot use.
+region_zones() {  # $1 = region
+  gcloud compute zones list --format="value(name)" 2>/dev/null \
+    | grep "^${1}-" | head -12
+}
+
+# Ask for a zone until it is one this project can use, in the right region
+# and not the one to avoid. A value that is already good is taken as it is.
+# Sets REPLY.
+acquire_zone() {  # $1 = label, $2 = current value, $3 = region ("" = any), $4 = zone to avoid
+  local label="$1" current="$2" want_region="$3" avoid="$4"
+  local ans note="" zr tries=0 default="$2"
+
+  if [ -n "$current" ]; then
+    if zone_usable "$current"; then
+      if [ -z "$want_region" ] || [ "${current%-*}" = "$want_region" ]; then
+        if [ -z "$avoid" ] || [ "$current" != "$avoid" ]; then
+          REPLY="$current"
+          return 0
+        fi
+        warn "the lab wants a zone different from $avoid for this VM"
+        default="$(default_zone_in_region "$want_region" "$avoid")"
+        [ -z "$default" ] && default="$current"
+      else
+        warn "the zone $current is in ${current%-*}, but the lab puts this VM in $want_region"
+        default="$(default_zone_in_region "$want_region" "$avoid")"
+        [ -z "$default" ] && default="$current"
+      fi
+    else
+      warn "this project cannot use the zone $current"
+      default="$(default_zone_in_region "$want_region" "$avoid")"
+      [ -z "$default" ] && default="$current"
+    fi
+  fi
+
+  while :; do
+    if [ -n "$note" ]; then
+      warn "$note"
+    fi
+    printf "  %s%s%s [%s]: " "$C_BOLD" "$label" "$C_RESET" "$default"
+    if ! read -r ans; then
+      echo ""
+      ans=""
+    fi
+    ans="${ans:-$default}"
+    tries=$((tries + 1))
+    if [ "$tries" -gt 6 ]; then
+      err "too many rejected zones - giving up"
+      exit 2
+    fi
+    if ! zone_usable "$ans"; then
+      note="this project cannot use the zone $ans - give another one"
+      continue
+    fi
+    zr="${ans%-*}"
+    if [ -n "$want_region" ] && [ "$zr" != "$want_region" ]; then
+      note="the zone $ans is in $zr, but the lab puts this VM in $want_region - give another one"
+      continue
+    fi
+    if [ -n "$avoid" ] && [ "$ans" = "$avoid" ]; then
+      note="the lab wants a zone different from $avoid for this VM - give another one"
+      continue
+    fi
+    REPLY="$ans"
+    return 0
+  done
+}
+
+# The first zone of a region that this project can use, skipping $2.
+default_zone_in_region() {  # $1 = region, $2 = zone to avoid
+  [ -z "$1" ] && return 1
+  local z
+  for z in $(region_zones "$1"); do
+    [ "$z" = "$2" ] && continue
+    if zone_usable "$z"; then
+      printf '%s' "$z"
+      return 0
+    fi
+  done
+  return 1
+}
+
 GCP_ZONE="$(gcloud config get-value compute/zone 2>/dev/null)"
 [ "$GCP_ZONE" = "(unset)" ] && GCP_ZONE=""
 
@@ -183,21 +287,24 @@ ZONE1="${ZONE1_OVERRIDE:-${ZONE:-${Z1:-}}}"
 ZONE2="${ZONE2_OVERRIDE:-${ZONE_1:-${Z2:-}}}"
 ZONE3="${ZONE3_OVERRIDE:-${ZONE_2:-${Z3:-}}}"
 
+echo ""
+warn "the lab assigns the regions and the zones per lab run"
+dim "  they are on the lab setup panel - copy them from there"
+if [ -n "$GCP_ZONE" ]; then
+  dim "  the gcloud default zone is $GCP_ZONE"
+fi
+echo ""
+
 if [ -n "$ZONE1" ] && [ -n "$ZONE2" ] && [ -n "$ZONE3" ]; then
   info "the lab's zones came from the environment: $ZONE1, $ZONE2, $ZONE3"
-else
-  echo ""
-  warn "the lab assigns the regions and the zones per lab run"
-  dim "  they are on the lab setup panel - copy them from there"
-  if [ -n "$GCP_ZONE" ]; then
-    dim "  the gcloud default zone is $GCP_ZONE"
-  fi
-  echo ""
-  ask ZONE1 "Zone 1 - vpc-demo-instance1 (in REGION 1)" "${ZONE1:-${GCP_ZONE:-us-central1-a}}"
-  ask ZONE2 "Zone 2 - vpc-demo-instance2 (in REGION 2)" "${ZONE2:-us-east1-b}"
-  ask ZONE3 "Zone 3 - on-prem-instance1   (in REGION 1)" "${ZONE3:-us-central1-b}"
   echo ""
 fi
+
+acquire_zone "Zone 1 - vpc-demo-instance1" "${ZONE1:-${GCP_ZONE:-us-central1-a}}" "" ""
+ZONE1="$REPLY"
+
+acquire_zone "Zone 2 - vpc-demo-instance2" "${ZONE2:-us-east1-b}" "" ""
+ZONE2="$REPLY"
 
 REGION1="${REGION1_OVERRIDE:-${ZONE1%-*}}"
 REGION2="${REGION2_OVERRIDE:-${ZONE2%-*}}"
@@ -209,18 +316,10 @@ if [ "$REGION1" = "$REGION2" ]; then
   warn "check --region1 and --region2"
 fi
 
-# The lab puts on-prem-instance1 in a zone of REGION 1 that is NOT the zone of
-# vpc-demo-instance1. If the same zone was given, pick another one.
-if [ "$ZONE3" = "$ZONE1" ] && [ "${ZONE3%-*}" = "$REGION1" ]; then
-  for cand in a b c; do
-    if [ "$REGION1-$cand" != "$ZONE1" ]; then
-      warn "on-prem-instance1 must not share the zone of vpc-demo-instance1"
-      warn "using $REGION1-$cand instead of $ZONE3"
-      ZONE3="$REGION1-$cand"
-      break
-    fi
-  done
-fi
+acquire_zone "Zone 3 - on-prem-instance1 (in REGION 1 = $REGION1, not zone 1)" \
+             "${ZONE3:-}" "$REGION1" "$ZONE1"
+ZONE3="$REPLY"
+echo ""
 
 # ---------------------------------------------------------------------------
 # names, ranges and the rest of the lab's fixed values
@@ -437,27 +536,62 @@ ensure_firewall() {  # $1 = name, $2 = network, $3 = allow, $4 = source ranges
   return 0
 }
 
-ensure_instance() {  # $1 = name, $2 = subnet, $3 = zone, $4 = region
-  local n="$1" subnet="$2" zone="$3" region="$4"
-  if ! zone_in_region "$zone" "$region"; then
-    warn "the zone $zone is not in $region - the lab puts that VM in $region"
-    zone="${region}-a"
-    info "using $zone instead"
-  fi
-  if instance_exists "$n" "$zone"; then
-    ok "$n already exists in $zone"
-  else
-    info "creating $n in $zone (this takes about a minute)"
+ensure_instance() {  # $1 = name, $2 = subnet, $3 = preferred zone, $4 = region
+  local n="$1" subnet="$2" pref="$3" region="$4"
+  local zone="" z tried=""
+
+  # The zone has to be in the region of the subnet, otherwise the create
+  # call fails with "subnet not found in that zone". If the preferred zone
+  # is not usable, the other zones of the region are tried.
+  for z in "$pref" $(region_zones "$region"); do
+    case " $tried " in
+      *" $z "*) continue ;;
+    esac
+    tried="$tried $z"
+    if instance_exists "$n" "$z"; then
+      ok "$n already exists in $z"
+      zone="$z"
+      break
+    fi
+    info "creating $n in $z (this takes about a minute)"
     if run_live "$WORKDIR/instance-$n.log" gcloud compute instances create "$n" \
-         --machine-type="$MACHINE_TYPE" --zone="$zone" --subnet="$subnet" \
+         --machine-type="$MACHINE_TYPE" --zone="$z" --subnet="$subnet" \
          --project "$PROJECT_ID" --quiet; then
-      ok "created $n in $zone"
+      ok "created $n in $z"
+      zone="$z"
+      break
+    fi
+    warn "could not create $n in $z"
+    tail -4 "$WORKDIR/instance-$n.log" 2>/dev/null | sed 's/^/      /'
+  done
+
+  if [ -z "$zone" ]; then
+    # the preferred zone, whatever the state of the project
+    if instance_exists "$n" "$pref"; then
+      ok "$n already exists in $pref"
+      zone="$pref"
     else
-      note_fail "could not create $n in $zone"
-      dim "  the log is in $WORKDIR/instance-$n.log"
-      return 1
+      info "creating $n in $pref (this takes about a minute)"
+      if run_live "$WORKDIR/instance-$n.log" gcloud compute instances create "$n" \
+           --machine-type="$MACHINE_TYPE" --zone="$pref" --subnet="$subnet" \
+           --project "$PROJECT_ID" --quiet; then
+        ok "created $n in $pref"
+        zone="$pref"
+      else
+        note_fail "could not create $n in $pref"
+        dim "  the log is in $WORKDIR/instance-$n.log"
+        tail -4 "$WORKDIR/instance-$n.log" 2>/dev/null | sed 's/^/      /'
+        return 1
+      fi
     fi
   fi
+
+  # remember the zone that worked
+  case "$n" in
+    "$VM1")     ZONE1="$zone" ;;
+    "$VM2")     ZONE2="$zone" ;;
+    "$ONPREM_VM") ZONE3="$zone" ;;
+  esac
 
   info "waiting for $n to start"
   local i status=""

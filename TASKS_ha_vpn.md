@@ -21,6 +21,13 @@ on the lab setup panel. In the commands below:
 If the lab started your shell with `ZONE`, `ZONE_1` and `ZONE_2` (or `Z1`,
 `Z2`, `Z3`) in the environment, they are already the three zones above.
 
+> **Not every zone is available in a lab project.** A zone that cannot be
+> fetched comes back as
+> `Permission denied on 'locations/<zone>' (or it may not exist)`, and the
+> instance create fails with the same message. If that happens, pick another
+> zone of the same region — `gcloud compute zones describe <zone>` tells you
+> whether the project can use it.
+
 ---
 
 ## Task 1 — Set up a Global VPC environment
