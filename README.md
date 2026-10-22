@@ -1553,19 +1553,23 @@ chmod +x gsp_ha_vpn.sh
 |---|---|
 | 1 | `vpc-demo` in custom mode, `vpc-demo-subnet1` (`10.1.1.0/24`) and `vpc-demo-subnet2` (`10.2.1.0/24`) in the two regions, the two firewall rules and the two VMs ⏸ |
 | 2 | `on-prem`, `on-prem-subnet1` (`192.168.1.0/24`), its two firewall rules and `on-prem-instance1` ⏸ |
-| 3 | the two HA VPN gateways, `vpc-demo-vpn-gw1` and `on-prem-vpn-gw1` ⏸ |
-| 4 | the two Cloud Routers, `vpc-demo-router1` (asn 65001) and `on-prem-router1` (asn 65002) ⏸ |
-| 5 | the four tunnels, interface 0 to 0 and interface 1 to 1 ⏸ |
-| 6 | the four router interfaces and the four BGP peers ⏸ |
-| 7 | `vpc-demo-allow-subnets-from-on-prem` and `on-prem-allow-subnets-from-vpc-demo` ⏸ |
-| 8 | global dynamic routing on `vpc-demo` ⏸ |
-| 9 | waits for the tunnels and the BGP sessions, then pings both VMs from `on-prem-instance1` ⏸ |
+| 3 | the two HA VPN gateways `vpc-demo-vpn-gw1` and `on-prem-vpn-gw1`, and the two Cloud Routers `vpc-demo-router1` (asn 65001) and `on-prem-router1` (asn 65002) ⏸ |
+| 4 | the four tunnels, interface 0 to 0 and interface 1 to 1 ⏸ |
+| 5 | the four router interfaces and the four BGP peers ⏸ |
+| 6 | the two cross-VPC firewall rules, the tunnel status, global dynamic routing on `vpc-demo`, and the pings to `10.1.1.2` and `10.2.1.2` from `on-prem-instance1` ⏸ |
+| 7 | the HA test: deletes `vpc-demo-tunnel0`, shows `on-prem-tunnel0` with a broken handshake, and pings again to prove the traffic moved to tunnel 1 ⏸ |
+
+The five lab checkpoints line up with those tasks: *Create two VPC networks
+and instances* (end of task 2), *Configure HA VPN gateways* (end of task 3),
+*Configure dynamic routing with VPN tunnels* (end of task 5), *Configure
+global dynamic routing mode* (end of task 6) and *Verify and test HA VPN
+gateway configuration* (end of task 7).
 
 ### The two regions and the three zones are lab-assigned
 
 They change on every lab run and cannot be read from the project. The script
 takes them from the shell the lab starts — Arcade exports `ZONE`, `ZONE_1`
-and `ZONE_2` — and asks for whatever is missing:
+and `ZONE_2` (or `Z1`, `Z2`, `Z3`) — and asks for whatever is missing:
 
 ```
   Zone 1 - vpc-demo-instance1 (in REGION 1) [us-central1-a]:
@@ -1574,7 +1578,10 @@ and `ZONE_2` — and asks for whatever is missing:
 ```
 
 The regions are derived from the zones, and the script warns when the two
-regions come out the same.
+regions come out the same. `on-prem-instance1` also has to sit in a
+**different** zone from `vpc-demo-instance1` — the lab says so, and the API
+does not enforce it — so the script moves it to another zone of the same
+region when it has to.
 
 ### Everything HA VPN lives in one region
 
@@ -1608,9 +1615,18 @@ Cloud Router in REGION 1 only advertises the subnets in its own region, so
 gcloud compute networks update vpc-demo --bgp-routing-mode=GLOBAL
 ```
 
-The lab asks for `vpc-demo`. The script also sets `on-prem` to `GLOBAL`,
-which the lab does not ask for: with regional routing the `on-prem` router
-would not advertise a subnet that sits in another region either.
+The `on-prem` network keeps its regional routing — its subnet and its
+router are both in REGION 1, so it does not need it.
+
+### Task 7 deletes a tunnel on purpose
+
+The lab's task 7 brings `vpc-demo-tunnel0` down to prove the high
+availability: the peer tunnel reports a broken handshake and the traffic
+moves to the second tunnel. The script does exactly that, and the ping at
+the end proves the traffic still flows.
+
+If the lab's progress panel turns out to want all four tunnels, re-run with
+`--keep-tunnel0` and the script will leave `vpc-demo-tunnel0` alone.
 
 ### The creates block for about a minute
 
@@ -1625,14 +1641,15 @@ a heartbeat, so the script never looks stuck.
 | `--project ID` | active gcloud project | Target project |
 | `--region1 REGION` | from zone 1 | REGION 1 of the lab |
 | `--region2 REGION` | from zone 2 | REGION 2 of the lab |
-| `--zone1 ZONE` | `$ZONE` | Zone of `vpc-demo-instance1` |
-| `--zone2 ZONE` | `$ZONE_1` | Zone of `vpc-demo-instance2` |
-| `--zone3 ZONE` | `$ZONE_2` | Zone of `on-prem-instance1` |
+| `--zone1 ZONE` | `$ZONE` / `$Z1` | Zone of `vpc-demo-instance1` |
+| `--zone2 ZONE` | `$ZONE_1` / `$Z2` | Zone of `vpc-demo-instance2` |
+| `--zone3 ZONE` | `$ZONE_2` / `$Z3` | Zone of `on-prem-instance1` |
 | `--secret S` | generated once | The IKE shared secret |
 | `--machine-type T` | `e2-medium` | The VM machine type |
-| `--task N` | all | Run only task N (1–9) |
+| `--task N` | all | Run only task N (1–7) |
 | `--yes` | off | Do not pause for the checkpoints |
-| `--no-verify` | off | Do not wait for the tunnels and skip the ping test |
+| `--no-verify` | off | Do not wait for the tunnels and skip the ping tests |
+| `--keep-tunnel0` | off | Skip the task 7 HA test, keep `vpc-demo-tunnel0` |
 | `-h, --help` | | Usage |
 
 ---

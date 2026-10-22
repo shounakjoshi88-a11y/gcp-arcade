@@ -3,16 +3,15 @@
 #  "Configure Google Cloud HA VPN"
 #  Google Cloud Arcade / Cloud Skills Boost lab (focus 644549).
 #
-#  Builds the whole HA VPN topology the lab asks for:
-#    * a custom mode VPC "vpc-demo" with one subnet and one VM in each of
-#      the lab's two regions
-#    * a second VPC "on-prem" that plays the customer's data centre, with
-#      its own subnet and VM
-#    * an HA VPN gateway and a Cloud Router in each VPC, four tunnels between
-#      the two gateways (interface 0 to 0, interface 1 to 1) and BGP peering
-#      on all four of them
-#    * global dynamic routing, so the second region of vpc-demo can be
-#      reached from on-prem
+#  Follows the lab task for task:
+#    1  the global VPC "vpc-demo" with two subnets and two VMs
+#    2  the simulated on-premises VPC "on-prem" with its subnet and VM
+#    3  the HA VPN gateway and the Cloud Router in each VPC
+#    4  the two VPN tunnels from each gateway
+#    5  the BGP peering for every tunnel
+#    6  the firewall rules, the tunnel status, global dynamic routing and the
+#       pings that prove the private connectivity
+#    7  the HA test: tunnel 0 goes down, the traffic moves to tunnel 1
 #
 #  QUICK START (Cloud Shell):
 #     curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_ha_vpn.sh
@@ -25,29 +24,26 @@
 #     --region2 REGION  the lab's REGION 2 (default: from zone2)
 #     --zone1 ZONE      zone of vpc-demo-instance1  (in REGION 1)
 #     --zone2 ZONE      zone of vpc-demo-instance2  (in REGION 2)
-#     --zone3 ZONE      zone of on-prem-instance1   (in REGION 1)
+#     --zone3 ZONE      zone of on-prem-instance1   (in REGION 1, not zone 1)
 #     --secret SECRET   the IKE shared secret (default: generated once)
 #     --machine-type T  the VM machine type (default: e2-medium)
-#     --task N          run only task N (1-9)
+#     --task N          run only task N (1-7)
 #     --yes             do not pause for the checkpoints
-#     --no-verify       do not wait for the tunnels and skip the ping test
+#     --no-verify       do not wait for the tunnels and skip the ping tests
+#     --keep-tunnel0    do not run the task 7 HA test (keeps vpc-demo-tunnel0)
 #     -h, --help        this help
 #
-#  CHECKPOINTS:
-#     1. Create the vpc-demo VPC network, its subnets and its VMs
-#     2. Create the on-prem VPC network, its subnet and its VM
-#     3. Create the HA VPN gateways
-#     4. Create the Cloud Routers
-#     5. Create the four VPN tunnels
-#     6. Create the BGP interfaces and the BGP peers
-#     7. Allow the traffic between the two VPCs
-#     8. Turn on global dynamic routing
-#     9. Verify the HA VPN configuration
+#  CHECKPOINTS (one per lab objective):
+#     1. Create two VPC networks and instances        (end of task 2)
+#     2. Configure HA VPN gateways                    (end of task 3)
+#     3. Configure dynamic routing with VPN tunnels   (end of task 5)
+#     4. Configure global dynamic routing mode        (end of task 6)
+#     5. Verify and test HA VPN gateway configuration (end of task 7)
 #
 #  NOTES:
 #   * The lab injects the two regions and the three zones per run. The script
-#     reads them from the shell the lab starts (ZONE, ZONE_1, ZONE_2) and
-#     asks for whatever is missing.
+#     reads them from the shell the lab starts (ZONE, ZONE_1, ZONE_2 or Z1,
+#     Z2, Z3) and asks for whatever is missing.
 #   * Everything HA VPN lives in ONE region. The gateway, its router, the
 #     peer gateway and the tunnels all have to be in the same region or the
 #     tunnel create call is rejected. That region is REGION 1, the region of
@@ -55,8 +51,11 @@
 #   * The two tunnels of a gateway have to be wired interface 0 to interface
 #     0 and interface 1 to interface 1. A crossed pair still builds, and the
 #     99.99% SLA does not hold.
-#   * Creating a gateway or a tunnel blocks for about a minute, and a silent
-#     wait looks exactly like a hang, so those calls stream with a heartbeat.
+#   * on-prem-instance1 goes in a zone of REGION 1 that is NOT the zone of
+#     vpc-demo-instance1 - the lab says so explicitly.
+#   * Creating a gateway, a router, a tunnel or a VM blocks for about a
+#     minute, and a silent wait looks exactly like a hang, so those calls
+#     stream with a heartbeat.
 # =============================================================================
 
 set -uo pipefail
@@ -90,6 +89,7 @@ MACHINE_TYPE_OVERRIDE=""
 ONLY_TASK=""
 ASSUME_YES=0
 DO_VERIFY=1
+KEEP_TUNNEL0=0
 
 usage() {
   cat <<'USAGE_END'
@@ -106,12 +106,13 @@ OPTIONS:
    --region2 REGION  the lab's REGION 2 (default: from zone2)
    --zone1 ZONE      zone of vpc-demo-instance1  (in REGION 1)
    --zone2 ZONE      zone of vpc-demo-instance2  (in REGION 2)
-   --zone3 ZONE      zone of on-prem-instance1   (in REGION 1)
+   --zone3 ZONE      zone of on-prem-instance1   (in REGION 1, not zone 1)
    --secret SECRET   the IKE shared secret (default: generated once and kept)
    --machine-type T  the VM machine type (default: e2-medium)
-   --task N          run only task N (1-9)
+   --task N          run only task N (1-7)
    --yes             do not pause for the checkpoints
-   --no-verify       do not wait for the tunnels and skip the ping test
+   --no-verify       do not wait for the tunnels and skip the ping tests
+   --keep-tunnel0    do not run the task 7 HA test (keeps vpc-demo-tunnel0)
 USAGE_END
   exit 0
 }
@@ -129,6 +130,7 @@ while [ $# -gt 0 ]; do
     --task)         ONLY_TASK="$2";              shift 2 ;;
     --yes)          ASSUME_YES=1;                shift ;;
     --no-verify)    DO_VERIFY=0;                 shift ;;
+    --keep-tunnel0) KEEP_TUNNEL0=1;              shift ;;
     -h|--help)      usage ;;
     *) echo "Unknown option: $1 (try --help)" >&2; exit 2 ;;
   esac
@@ -156,10 +158,11 @@ mkdir -p "$WORKDIR" 2>/dev/null || WORKDIR="."
 # the lab's regions and zones
 #
 # The lab injects them per run and they cannot be read from the project.
-# Arcade starts the shell with them in the environment:
-#   ZONE    - the zone of vpc-demo-instance1
-#   ZONE_1  - the zone of vpc-demo-instance2
-#   ZONE_2  - the zone of on-prem-instance1
+# Arcade starts the shell with them in the environment - either as
+# ZONE / ZONE_1 / ZONE_2 or as Z1 / Z2 / Z3:
+#   ZONE (Z1)  - the zone of vpc-demo-instance1
+#   ZONE_1 (Z2)- the zone of vpc-demo-instance2
+#   ZONE_2 (Z3)- the zone of on-prem-instance1
 # Whatever is missing is asked for. Every answer has a default, so pressing
 # Enter all the way through still produces a working topology.
 # ---------------------------------------------------------------------------
@@ -176,9 +179,9 @@ ask() {  # $1 = variable name, $2 = label, $3 = default
 GCP_ZONE="$(gcloud config get-value compute/zone 2>/dev/null)"
 [ "$GCP_ZONE" = "(unset)" ] && GCP_ZONE=""
 
-ZONE1="${ZONE1_OVERRIDE:-${ZONE:-}}"
-ZONE2="${ZONE2_OVERRIDE:-${ZONE_1:-}}"
-ZONE3="${ZONE3_OVERRIDE:-${ZONE_2:-}}"
+ZONE1="${ZONE1_OVERRIDE:-${ZONE:-${Z1:-}}}"
+ZONE2="${ZONE2_OVERRIDE:-${ZONE_1:-${Z2:-}}}"
+ZONE3="${ZONE3_OVERRIDE:-${ZONE_2:-${Z3:-}}}"
 
 if [ -n "$ZONE1" ] && [ -n "$ZONE2" ] && [ -n "$ZONE3" ]; then
   info "the lab's zones came from the environment: $ZONE1, $ZONE2, $ZONE3"
@@ -206,11 +209,23 @@ if [ "$REGION1" = "$REGION2" ]; then
   warn "check --region1 and --region2"
 fi
 
+# The lab puts on-prem-instance1 in a zone of REGION 1 that is NOT the zone of
+# vpc-demo-instance1. If the same zone was given, pick another one.
+if [ "$ZONE3" = "$ZONE1" ] && [ "${ZONE3%-*}" = "$REGION1" ]; then
+  for cand in a b c; do
+    if [ "$REGION1-$cand" != "$ZONE1" ]; then
+      warn "on-prem-instance1 must not share the zone of vpc-demo-instance1"
+      warn "using $REGION1-$cand instead of $ZONE3"
+      ZONE3="$REGION1-$cand"
+      break
+    fi
+  done
+fi
+
 # ---------------------------------------------------------------------------
 # names, ranges and the rest of the lab's fixed values
 # ---------------------------------------------------------------------------
 MACHINE_TYPE="${MACHINE_TYPE_OVERRIDE:-e2-medium}"
-IMAGE_FAMILY="debian-12"
 
 VPC="vpc-demo"
 SUBNET1="vpc-demo-subnet1"
@@ -282,14 +297,19 @@ tunnel_status() {  # $1 = tunnel
     --format="value(status)" 2>/dev/null
 }
 
+tunnel_detail() {  # $1 = tunnel
+  gcloud compute vpn-tunnels describe "$1" --region "$REGION1" --project "$PROJECT_ID" \
+    --format="value(detailedStatus)" 2>/dev/null
+}
+
 instance_ip() {  # $1 = instance, $2 = zone
   gcloud compute instances describe "$1" --zone "$2" --project "$PROJECT_ID" \
     --format="value(networkInterfaces[0].networkIP)" 2>/dev/null
 }
 
-# Run a command and show its output as it arrives. Creating a VPN gateway or
-# a tunnel blocks for about a minute while the operation runs, and a silent
-# wait looks exactly like a hang.
+# Run a command and show its output as it arrives. Creating a VPN gateway, a
+# router, a tunnel or a VM blocks for about a minute while the operation
+# runs, and a silent wait looks exactly like a hang.
 run_live() {  # $1 = log file, rest = command
   local log="$1"; shift
   local pid last=0 n elapsed=0
@@ -318,11 +338,14 @@ run_live() {  # $1 = log file, rest = command
   return $rc
 }
 
-pause_for_check() {  # $1 = task number, $2 = checkpoint name
+pause_for_check() {  # $1 = task number, $2 = checkpoint name, $3 = extra note
   if [ "$ASSUME_YES" = "1" ]; then return 0; fi
   echo ""
   printf "  %s>>> Task %s applied: %s%s\n" "$C_BOLD" "$1" "$2" "$C_RESET"
   printf "  %s    Click 'Check my progress' for '%s' in the lab console,%s\n" "$C_DIM" "$2" "$C_RESET"
+  if [ -n "${3:-}" ]; then
+    printf "  %s    %s%s\n" "$C_DIM" "$3" "$C_RESET"
+  fi
   printf "  %s    then press Enter here to continue.%s\n" "$C_DIM" "$C_RESET"
   printf "  %s    >%s" "$C_YELLOW" "$C_RESET"
   read -r _ || true
@@ -358,7 +381,7 @@ gcloud services enable compute.googleapis.com --quiet >/dev/null 2>&1
 ok "the Compute Engine API is enabled"
 
 # ---------------------------------------------------------------------------
-# Task 1 - the vpc-demo VPC, its subnets, its firewall rules and its VMs
+# building blocks
 # ---------------------------------------------------------------------------
 ensure_network() {  # $1 = name
   local n="$1"
@@ -374,6 +397,7 @@ ensure_network() {  # $1 = name
     note_fail "could not create the network $n"
     return 1
   fi
+  return 0
 }
 
 ensure_subnet() {  # $1 = name, $2 = network, $3 = range, $4 = region
@@ -391,6 +415,7 @@ ensure_subnet() {  # $1 = name, $2 = network, $3 = range, $4 = region
     note_fail "could not create the subnet $n in $region"
     return 1
   fi
+  return 0
 }
 
 ensure_firewall() {  # $1 = name, $2 = network, $3 = allow, $4 = source ranges
@@ -409,10 +434,11 @@ ensure_firewall() {  # $1 = name, $2 = network, $3 = allow, $4 = source ranges
     note_fail "could not create the firewall rule $n"
     return 1
   fi
+  return 0
 }
 
-ensure_instance() {  # $1 = name, $2 = network, $3 = subnet, $4 = zone, $5 = region
-  local n="$1" net="$2" subnet="$3" zone="$4" region="$5"
+ensure_instance() {  # $1 = name, $2 = subnet, $3 = zone, $4 = region
+  local n="$1" subnet="$2" zone="$3" region="$4"
   if ! zone_in_region "$zone" "$region"; then
     warn "the zone $zone is not in $region - the lab puts that VM in $region"
     zone="${region}-a"
@@ -423,10 +449,7 @@ ensure_instance() {  # $1 = name, $2 = network, $3 = subnet, $4 = zone, $5 = reg
   else
     info "creating $n in $zone (this takes about a minute)"
     if run_live "$WORKDIR/instance-$n.log" gcloud compute instances create "$n" \
-         --zone="$zone" --machine-type="$MACHINE_TYPE" \
-         --network-interface="network=$net,subnet=$subnet" \
-         --image-family="$IMAGE_FAMILY" --image-project=debian-cloud \
-         --boot-disk-size=10GB --boot-disk-type=pd-standard \
+         --machine-type="$MACHINE_TYPE" --zone="$zone" --subnet="$subnet" \
          --project "$PROJECT_ID" --quiet; then
       ok "created $n in $zone"
     else
@@ -456,46 +479,6 @@ ensure_instance() {  # $1 = name, $2 = network, $3 = subnet, $4 = zone, $5 = reg
   return 0
 }
 
-task1() {
-  step "Task 1 - The vpc-demo VPC network, its subnets and its VMs"
-
-  ensure_network "$VPC" || return 1
-  ensure_subnet "$SUBNET1" "$VPC" "$RANGE1" "$REGION1" || return 1
-  ensure_subnet "$SUBNET2" "$VPC" "$RANGE2" "$REGION2" || return 1
-
-  ensure_firewall "vpc-demo-allow-custom" "$VPC" \
-    "tcp:0-65535,udp:0-65535,icmp" "10.0.0.0/8" || return 1
-  ensure_firewall "vpc-demo-allow-ssh-icmp" "$VPC" \
-    "tcp:22,icmp" "0.0.0.0/0" || return 1
-
-  ensure_instance "$VM1" "$VPC" "$SUBNET1" "$ZONE1" "$REGION1" || return 1
-  ensure_instance "$VM2" "$VPC" "$SUBNET2" "$ZONE2" "$REGION2" || return 1
-
-  pause_for_check 1 "Create the vpc-demo VPC network and the VM instances"
-}
-
-# ---------------------------------------------------------------------------
-# Task 2 - the on-prem VPC, its subnet and its VM
-# ---------------------------------------------------------------------------
-task2() {
-  step "Task 2 - The on-prem VPC network, its subnet and its VM"
-
-  ensure_network "$ONPREM" || return 1
-  ensure_subnet "$ONPREM_SUBNET" "$ONPREM" "$ONPREM_RANGE" "$REGION1" || return 1
-
-  ensure_firewall "on-prem-allow-custom" "$ONPREM" \
-    "tcp:0-65535,udp:0-65535,icmp" "192.168.0.0/16" || return 1
-  ensure_firewall "on-prem-allow-ssh-icmp" "$ONPREM" \
-    "tcp:22,icmp" "0.0.0.0/0" || return 1
-
-  ensure_instance "$ONPREM_VM" "$ONPREM" "$ONPREM_SUBNET" "$ZONE3" "$REGION1" || return 1
-
-  pause_for_check 2 "Create the on-prem VPC network and the VM instance"
-}
-
-# ---------------------------------------------------------------------------
-# Task 3 - the HA VPN gateways
-# ---------------------------------------------------------------------------
 ensure_gateway() {  # $1 = name, $2 = network
   local n="$1" net="$2"
   if gateway_exists "$n" "$REGION1"; then
@@ -535,18 +518,6 @@ ensure_gateway() {  # $1 = name, $2 = network
   return 0
 }
 
-task3() {
-  step "Task 3 - The HA VPN gateways"
-
-  ensure_gateway "$GW1" "$VPC" || return 1
-  ensure_gateway "$GW2" "$ONPREM" || return 1
-
-  pause_for_check 3 "Create the HA VPN gateways"
-}
-
-# ---------------------------------------------------------------------------
-# Task 4 - the Cloud Routers
-# ---------------------------------------------------------------------------
 ensure_router() {  # $1 = name, $2 = network, $3 = asn
   local n="$1" net="$2" asn="$3"
   if router_exists "$n" "$REGION1"; then
@@ -563,20 +534,9 @@ ensure_router() {  # $1 = name, $2 = network, $3 = asn
     dim "  the log is in $WORKDIR/router-$n.log"
     return 1
   fi
+  return 0
 }
 
-task4() {
-  step "Task 4 - The Cloud Routers"
-
-  ensure_router "$ROUTER1" "$VPC" "$ASN1" || return 1
-  ensure_router "$ROUTER2" "$ONPREM" "$ASN2" || return 1
-
-  pause_for_check 4 "Create the Cloud Routers"
-}
-
-# ---------------------------------------------------------------------------
-# Task 5 - the four VPN tunnels
-# ---------------------------------------------------------------------------
 ensure_tunnel() {  # $1 = name, $2 = gateway, $3 = peer gateway, $4 = router, $5 = interface
   local n="$1" gw="$2" peer="$3" router="$4" iface="$5"
   if tunnel_exists "$n" "$REGION1"; then
@@ -603,22 +563,9 @@ ensure_tunnel() {  # $1 = name, $2 = gateway, $3 = peer gateway, $4 = router, $5
     dim "  in the same region ($REGION1) and the interfaces have to match."
     return 1
   fi
+  return 0
 }
 
-task5() {
-  step "Task 5 - The VPN tunnels"
-
-  ensure_tunnel "$T_VPC0" "$GW1" "$GW2" "$ROUTER1" 0 || return 1
-  ensure_tunnel "$T_VPC1" "$GW1" "$GW2" "$ROUTER1" 1 || return 1
-  ensure_tunnel "$T_ONP0" "$GW2" "$GW1" "$ROUTER2" 0 || return 1
-  ensure_tunnel "$T_ONP1" "$GW2" "$GW1" "$ROUTER2" 1 || return 1
-
-  pause_for_check 5 "Create the VPN tunnels"
-}
-
-# ---------------------------------------------------------------------------
-# Task 6 - the BGP interfaces and the BGP peers
-# ---------------------------------------------------------------------------
 ensure_bgp_interface() {  # $1 = router, $2 = interface name, $3 = ip, $4 = tunnel
   local router="$1" name="$2" ip="$3" tunnel="$4"
   if router_has_interface "$router" "$name"; then
@@ -635,6 +582,7 @@ ensure_bgp_interface() {  # $1 = router, $2 = interface name, $3 = ip, $4 = tunn
     note_fail "could not add the BGP interface $name to $router"
     return 1
   fi
+  return 0
 }
 
 ensure_bgp_peer() {  # $1 = router, $2 = peer name, $3 = interface, $4 = peer ip, $5 = peer asn
@@ -654,50 +602,18 @@ ensure_bgp_peer() {  # $1 = router, $2 = peer name, $3 = interface, $4 = peer ip
     note_fail "could not add the BGP peer $name to $router"
     return 1
   fi
+  return 0
 }
 
-task6() {
-  step "Task 6 - The BGP peering for every tunnel"
-
-  ensure_bgp_interface "$ROUTER1" "if-tunnel0-to-on-prem" "169.254.0.1" "$T_VPC0" || return 1
-  ensure_bgp_peer      "$ROUTER1" "bgp-on-prem-tunnel0"  "if-tunnel0-to-on-prem" "169.254.0.2" "$ASN2" || return 1
-
-  ensure_bgp_interface "$ROUTER1" "if-tunnel1-to-on-prem" "169.254.1.1" "$T_VPC1" || return 1
-  ensure_bgp_peer      "$ROUTER1" "bgp-on-prem-tunnel1"  "if-tunnel1-to-on-prem" "169.254.1.2" "$ASN2" || return 1
-
-  ensure_bgp_interface "$ROUTER2" "if-tunnel0-to-vpc-demo" "169.254.0.2" "$T_ONP0" || return 1
-  ensure_bgp_peer      "$ROUTER2" "bgp-vpc-demo-tunnel0"  "if-tunnel0-to-vpc-demo" "169.254.0.1" "$ASN1" || return 1
-
-  ensure_bgp_interface "$ROUTER2" "if-tunnel1-to-vpc-demo" "169.254.1.2" "$T_ONP1" || return 1
-  ensure_bgp_peer      "$ROUTER2" "bgp-vpc-demo-tunnel1"  "if-tunnel1-to-vpc-demo" "169.254.1.1" "$ASN1" || return 1
-
-  pause_for_check 6 "Create the BGP peering for each tunnel"
-}
-
-# ---------------------------------------------------------------------------
-# Task 7 - the firewall rules that let the two VPCs talk to each other
-# ---------------------------------------------------------------------------
-task7() {
-  step "Task 7 - The firewall rules between the two VPCs"
-
-  ensure_firewall "vpc-demo-allow-subnets-from-on-prem" "$VPC" \
-    "tcp,udp,icmp" "$ONPREM_RANGE" || return 1
-  ensure_firewall "on-prem-allow-subnets-from-vpc-demo" "$ONPREM" \
-    "tcp,udp,icmp" "$RANGE1,$RANGE2" || return 1
-
-  pause_for_check 7 "Allow the traffic between the two VPCs"
-}
-
-# ---------------------------------------------------------------------------
-# Task 8 - global dynamic routing
-# ---------------------------------------------------------------------------
 set_routing_mode() {  # $1 = network, $2 = mode
   local n="$1" mode="$2"
   local current
   current="$(gcloud compute networks describe "$n" --project "$PROJECT_ID" \
               --format="value(bgpRoutingMode)" 2>/dev/null)"
-  [ -z "$current" ] && current="$(gcloud compute networks describe "$n" --project "$PROJECT_ID" \
-              --format="value(routingConfig.routingMode)" 2>/dev/null)"
+  if [ -z "$current" ] || [ "$current" = "None" ]; then
+    current="$(gcloud compute networks describe "$n" --project "$PROJECT_ID" \
+                --format="value(routingConfig.routingMode)" 2>/dev/null)"
+  fi
   if [ "$current" = "$mode" ]; then
     ok "the network $n already has $mode dynamic routing"
     return 0
@@ -713,25 +629,105 @@ set_routing_mode() {  # $1 = network, $2 = mode
     note_fail "could not set the dynamic routing of $n to $mode"
     return 1
   fi
-}
-
-task8() {
-  step "Task 8 - Global dynamic routing"
-
-  # vpc-demo is the one the lab asks for: it makes the second region of
-  # vpc-demo reachable from on-prem.
-  set_routing_mode "$VPC" "GLOBAL" || return 1
-
-  # on-prem is set to global as well. The lab only asks for vpc-demo, but
-  # with regional routing the on-prem router would not advertise a subnet
-  # that sits in another region, and the ping in task 9 would fail.
-  set_routing_mode "$ONPREM" "GLOBAL"
-
-  pause_for_check 8 "Enable global dynamic routing"
+  return 0
 }
 
 # ---------------------------------------------------------------------------
-# Task 9 - verify the configuration
+# Task 1 - the global VPC environment
+# ---------------------------------------------------------------------------
+task1() {
+  step "Task 1 - Set up a Global VPC environment"
+
+  ensure_network "$VPC" || return 1
+  ensure_subnet "$SUBNET1" "$VPC" "$RANGE1" "$REGION1" || return 1
+  ensure_subnet "$SUBNET2" "$VPC" "$RANGE2" "$REGION2" || return 1
+
+  ensure_firewall "vpc-demo-allow-custom" "$VPC" \
+    "tcp:0-65535,udp:0-65535,icmp" "10.0.0.0/8" || return 1
+  ensure_firewall "vpc-demo-allow-ssh-icmp" "$VPC" \
+    "tcp:22,icmp" "0.0.0.0/0" || return 1
+
+  ensure_instance "$VM1" "$SUBNET1" "$ZONE1" "$REGION1" || return 1
+  ensure_instance "$VM2" "$SUBNET2" "$ZONE2" "$REGION2" || return 1
+
+  pause_for_check 1 "Create a VPC network and VM instances" \
+    "the 'Create two VPC networks and instances' checkpoint also needs the on-prem network - it completes in task 2"
+}
+
+# ---------------------------------------------------------------------------
+# Task 2 - the simulated on-premises environment
+# ---------------------------------------------------------------------------
+task2() {
+  step "Task 2 - Set up a simulated on-premises environment"
+
+  ensure_network "$ONPREM" || return 1
+  ensure_subnet "$ONPREM_SUBNET" "$ONPREM" "$ONPREM_RANGE" "$REGION1" || return 1
+
+  ensure_firewall "on-prem-allow-custom" "$ONPREM" \
+    "tcp:0-65535,udp:0-65535,icmp" "192.168.0.0/16" || return 1
+  ensure_firewall "on-prem-allow-ssh-icmp" "$ONPREM" \
+    "tcp:22,icmp" "0.0.0.0/0" || return 1
+
+  ensure_instance "$ONPREM_VM" "$ONPREM_SUBNET" "$ZONE3" "$REGION1" || return 1
+
+  pause_for_check 2 "Create two VPC networks and instances"
+}
+
+# ---------------------------------------------------------------------------
+# Task 3 - the HA VPN gateway and the Cloud Routers
+# ---------------------------------------------------------------------------
+task3() {
+  step "Task 3 - Set up an HA VPN gateway"
+
+  ensure_gateway "$GW1" "$VPC" || return 1
+  ensure_gateway "$GW2" "$ONPREM" || return 1
+
+  info "the gateways are in $REGION1 - a tunnel can only connect two gateways in the same region"
+
+  ensure_router "$ROUTER1" "$VPC" "$ASN1" || return 1
+  ensure_router "$ROUTER2" "$ONPREM" "$ASN2" || return 1
+
+  pause_for_check 3 "Configure HA VPN gateways"
+}
+
+# ---------------------------------------------------------------------------
+# Task 4 - the two VPN tunnels from each gateway
+# ---------------------------------------------------------------------------
+task4() {
+  step "Task 4 - Create two VPN tunnels"
+
+  ensure_tunnel "$T_VPC0" "$GW1" "$GW2" "$ROUTER1" 0 || return 1
+  ensure_tunnel "$T_VPC1" "$GW1" "$GW2" "$ROUTER1" 1 || return 1
+  ensure_tunnel "$T_ONP0" "$GW2" "$GW1" "$ROUTER2" 0 || return 1
+  ensure_tunnel "$T_ONP1" "$GW2" "$GW1" "$ROUTER2" 1 || return 1
+
+  pause_for_check 4 "Configure dynamic routing with VPN tunnels" \
+    "the BGP peering of task 5 completes this checkpoint - click Check my progress again after task 5"
+}
+
+# ---------------------------------------------------------------------------
+# Task 5 - the BGP peering for every tunnel
+# ---------------------------------------------------------------------------
+task5() {
+  step "Task 5 - Create BGP peering for each tunnel"
+
+  ensure_bgp_interface "$ROUTER1" "if-tunnel0-to-on-prem" "169.254.0.1" "$T_VPC0" || return 1
+  ensure_bgp_peer      "$ROUTER1" "bgp-on-prem-tunnel0"  "if-tunnel0-to-on-prem" "169.254.0.2" "$ASN2" || return 1
+
+  ensure_bgp_interface "$ROUTER1" "if-tunnel1-to-on-prem" "169.254.1.1" "$T_VPC1" || return 1
+  ensure_bgp_peer      "$ROUTER1" "bgp-on-prem-tunnel1"  "if-tunnel1-to-on-prem" "169.254.1.2" "$ASN2" || return 1
+
+  ensure_bgp_interface "$ROUTER2" "if-tunnel0-to-vpc-demo" "169.254.0.2" "$T_ONP0" || return 1
+  ensure_bgp_peer      "$ROUTER2" "bgp-vpc-demo-tunnel0"  "if-tunnel0-to-vpc-demo" "169.254.0.1" "$ASN1" || return 1
+
+  ensure_bgp_interface "$ROUTER2" "if-tunnel1-to-vpc-demo" "169.254.1.2" "$T_ONP1" || return 1
+  ensure_bgp_peer      "$ROUTER2" "bgp-vpc-demo-tunnel1"  "if-tunnel1-to-vpc-demo" "169.254.1.1" "$ASN1" || return 1
+
+  pause_for_check 5 "Configure dynamic routing with VPN tunnels"
+}
+
+# ---------------------------------------------------------------------------
+# Task 6 - verify the routers, allow the traffic, enable global routing
 # ---------------------------------------------------------------------------
 wait_for_tunnels() {
   local i n t all
@@ -780,37 +776,48 @@ wait_for_bgp() {
   return 1
 }
 
-ping_from_onprem() {  # $1 = target ip, $2 = label
-  local target="$1" label="$2" out
+ping_from_onprem() {  # $1 = target ip, $2 = label, $3 = tries
+  local target="$1" label="$2" tries="${3:-3}" out i
   if [ -z "$target" ]; then
     warn "no IP for $label, skipping the ping"
     return 1
   fi
-  info "pinging $label ($target) from $ONPREM_VM"
-  out="$(gcloud compute ssh "$ONPREM_VM" --zone "$ZONE3" --project "$PROJECT_ID" \
-          --quiet --command="ping -c 3 -W 2 $target" 2>&1)"
-  if printf '%s' "$out" | grep -q "bytes from"; then
-    ok "$ONPREM_VM reaches $label"
-    return 0
-  fi
-  warn "$ONPREM_VM does not reach $label yet"
+  for i in $(seq 1 "$tries"); do
+    out="$(gcloud compute ssh "$ONPREM_VM" --zone "$ZONE3" --project "$PROJECT_ID" \
+            --quiet --command="ping -c 3 -W 2 $target" 2>&1)"
+    if printf '%s' "$out" | grep -q "bytes from"; then
+      ok "$ONPREM_VM reaches $label ($target)"
+      return 0
+    fi
+    info "ping to $label did not answer yet (try $i of $tries)"
+    sleep 10
+  done
+  warn "$ONPREM_VM does not reach $label ($target)"
   printf '%s\n' "$out" | tail -5 | sed 's/^/      /'
   return 1
 }
 
-task9() {
-  step "Task 9 - Verify the HA VPN configuration"
+task6() {
+  step "Task 6 - Verify router configurations and enable global routing"
 
-  if [ "$DO_VERIFY" != "1" ]; then
-    dim "  --no-verify was given, skipping the checks"
-    return 0
-  fi
+  info "the Cloud Router $ROUTER1"
+  gcloud compute routers describe "$ROUTER1" --region "$REGION1" --project "$PROJECT_ID" \
+    --format="yaml(bgp,interfaces)" 2>/dev/null | sed 's/^/    /'
+  info "the Cloud Router $ROUTER2"
+  gcloud compute routers describe "$ROUTER2" --region "$REGION1" --project "$PROJECT_ID" \
+    --format="yaml(bgp,interfaces)" 2>/dev/null | sed 's/^/    /'
 
-  info "the tunnels of the two gateways have to come up on their own"
-  wait_for_tunnels
+  echo ""
+  info "the firewall rules that let the two VPCs talk to each other"
+  ensure_firewall "vpc-demo-allow-subnets-from-on-prem" "$VPC" \
+    "tcp,udp,icmp" "$ONPREM_RANGE" || return 1
+  ensure_firewall "on-prem-allow-subnets-from-vpc-demo" "$ONPREM" \
+    "tcp,udp,icmp" "$RANGE1,$RANGE2" || return 1
 
-  info "the BGP sessions have to establish on top of that"
-  wait_for_bgp
+  echo ""
+  info "the tunnels"
+  gcloud compute vpn-tunnels list --region "$REGION1" --project "$PROJECT_ID" \
+    --format="table(name,status,peerGateway)" 2>/dev/null | sed 's/^/    /'
 
   local ip1 ip2
   ip1="$(instance_ip "$VM1" "$ZONE1")"
@@ -818,15 +825,86 @@ task9() {
   dim "    $VM1: $ip1"
   dim "    $VM2: $ip2"
 
-  ping_from_onprem "$ip1" "$VM1"
-  ping_from_onprem "$ip2" "$VM2"
+  if [ "$DO_VERIFY" = "1" ]; then
+    wait_for_tunnels
+    wait_for_bgp
+    echo ""
+    info "the private connectivity over the VPN"
+    ping_from_onprem "$ip1" "$VM1" 3
+  fi
 
   echo ""
-  info "the tunnel status"
+  info "global routing - a Cloud Router only sees its own region by default"
+  set_routing_mode "$VPC" "GLOBAL" || return 1
+  gcloud compute networks describe "$VPC" --project "$PROJECT_ID" \
+    --format="yaml(routingConfig)" 2>/dev/null | sed 's/^/    /'
+
+  if [ "$DO_VERIFY" = "1" ]; then
+    echo ""
+    info "the instance in the other region is now reachable"
+    ping_from_onprem "$ip2" "$VM2" 3
+  fi
+
+  pause_for_check 6 "Configure global dynamic routing mode"
+}
+
+# ---------------------------------------------------------------------------
+# Task 7 - the HA test: tunnel 0 goes down, traffic moves to tunnel 1
+# ---------------------------------------------------------------------------
+task7() {
+  step "Task 7 - Verify and test the configuration of HA VPN tunnels"
+
+  if [ "$KEEP_TUNNEL0" = "1" ]; then
+    warn "--keep-tunnel0 was given, skipping the HA test"
+    dim "  the lab's task 7 deletes $T_VPC0 and shows that the traffic"
+    dim "  moves to the second tunnel. If the lab asks for that, run"
+    dim "  this script without --keep-tunnel0."
+    pause_for_check 7 "Verify and test HA VPN gateway configuration"
+    return 0
+  fi
+
+  if ! tunnel_exists "$T_VPC0" "$REGION1"; then
+    ok "$T_VPC0 is already deleted - the HA test has been done"
+  else
+    info "bringing $T_VPC0 down"
+    if gcloud compute vpn-tunnels delete "$T_VPC0" --region "$REGION1" \
+         --project "$PROJECT_ID" --quiet >/dev/null 2>&1; then
+      ok "deleted $T_VPC0"
+    else
+      note_fail "could not delete $T_VPC0"
+      return 1
+    fi
+  fi
+
+  echo ""
+  info "the peer tunnel $T_ONP0 goes down with it"
+  local i detail=""
+  for i in $(seq 1 12); do
+    detail="$(tunnel_detail "$T_ONP0")"
+    if [ -n "$detail" ] && ! printf '%s' "$detail" | grep -qi "up and running"; then
+      ok "$T_ONP0: $detail"
+      break
+    fi
+    if [ $((i % 2)) -eq 0 ]; then
+      info "waiting for the peer tunnel to notice (${i}0s)"
+    fi
+    sleep 5
+  done
+
+  local ip1
+  ip1="$(instance_ip "$VM1" "$ZONE1")"
+  if [ "$DO_VERIFY" = "1" ]; then
+    echo ""
+    info "the traffic has to keep flowing over the second tunnel"
+    ping_from_onprem "$ip1" "$VM1 (over tunnel 1)" 3
+  fi
+
+  echo ""
+  info "the tunnel status now"
   gcloud compute vpn-tunnels list --region "$REGION1" --project "$PROJECT_ID" \
     --format="table(name,status,peerGateway)" 2>/dev/null | sed 's/^/    /'
 
-  pause_for_check 9 "Verify and test the HA VPN gateway configuration"
+  pause_for_check 7 "Verify and test HA VPN gateway configuration"
 }
 
 # ---------------------------------------------------------------------------
@@ -840,8 +918,6 @@ case "$ONLY_TASK" in
   5) task5 ;;
   6) task6 ;;
   7) task7 ;;
-  8) task8 ;;
-  9) task9 ;;
   "")
     task1
     task2
@@ -850,11 +926,9 @@ case "$ONLY_TASK" in
     task5
     task6
     task7
-    task8
-    task9
     ;;
   *)
-    err "--task must be between 1 and 9"
+    err "--task must be between 1 and 7"
     exit 2 ;;
 esac
 
@@ -876,25 +950,26 @@ echo "  Tunnels          : $T_VPC0, $T_VPC1, $T_ONP0, $T_ONP1"
 echo "  Shared secret    : $SECRET_FILE"
 echo ""
 echo "  Checkpoints:"
-echo "    1. Create the vpc-demo VPC network and the VM instances"
-echo "    2. Create the on-prem VPC network and the VM instance"
-echo "    3. Create the HA VPN gateways"
-echo "    4. Create the Cloud Routers"
-echo "    5. Create the VPN tunnels"
-echo "    6. Create the BGP peering for each tunnel"
-echo "    7. Allow the traffic between the two VPCs"
-echo "    8. Enable global dynamic routing"
-echo "    9. Verify the HA VPN configuration"
+echo "    1. Create two VPC networks and instances"
+echo "    2. Configure HA VPN gateways"
+echo "    3. Configure dynamic routing with VPN tunnels"
+echo "    4. Configure global dynamic routing mode"
+echo "    5. Verify and test HA VPN gateway configuration"
 echo ""
+if [ "$KEEP_TUNNEL0" = "0" ] && [ "$ONLY_TASK" != "7" ]; then
+  dim "  The HA test of task 7 deletes $T_VPC0, exactly as the lab does."
+  dim "  If the lab still wants all four tunnels, re-run with --keep-tunnel0."
+fi
 if [ "$FAILURES" -eq 0 ]; then
   printf "  %sAll steps completed.%s\n" "$C_GREEN" "$C_RESET"
 else
   printf "  %s%s step(s) reported a failure - see [FAIL] lines above.%s\n" "$C_RED" "$FAILURES" "$C_RESET"
 fi
 echo ""
-echo "  Clean up when you are done:"
-echo "    gcloud compute vpn-tunnels delete $T_VPC0 $T_VPC1 --region=$REGION1 --quiet"
+echo "  Clean up when you are done (the lab's task 8):"
 echo "    gcloud compute vpn-tunnels delete $T_ONP0 $T_ONP1 --region=$REGION1 --quiet"
+echo "    gcloud compute routers remove-bgp-peer $ROUTER1 --peer-name=bgp-on-prem-tunnel0 --peer-name=bgp-on-prem-tunnel1 --region=$REGION1 --quiet"
+echo "    gcloud compute routers remove-bgp-peer $ROUTER2 --peer-name=bgp-vpc-demo-tunnel0 --peer-name=bgp-vpc-demo-tunnel1 --region=$REGION1 --quiet"
 echo "    gcloud compute routers delete $ROUTER1 $ROUTER2 --region=$REGION1 --quiet"
 echo "    gcloud compute vpn-gateways delete $GW1 $GW2 --region=$REGION1 --quiet"
 echo "    gcloud compute instances delete $VM1 --zone=$ZONE1 --quiet"
