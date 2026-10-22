@@ -136,13 +136,14 @@ Click **Check my progress** — *Create a custom image for a web server*.
 
 ```bash
 gcloud compute health-checks create http http-health-check \
-    --port=80 \
-    --global
+    --port=80
 ```
 
-> **HTTP, not TCP.** The lab's health check is HTTP on port 80. A global
-> HTTP health check is also what the autohealing of a regional instance
-> group accepts.
+> **HTTP, not TCP.** The lab's health check is HTTP on port 80, and it is the
+> *legacy* health check — the one without a region, which is what the
+> autohealing of a regional instance group accepts. A health check created
+> with `--global` is the newer kind, and the autohealing rejects it with
+> *"the health check must be a legacy health check"*.
 
 ### The instance template
 

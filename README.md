@@ -1709,14 +1709,22 @@ The lab fixes the first region, the first zone and the second region:
 left to the student — it has to go in a **US** region other than `us-east4`,
 so the load balancer has to pick the closer backend.
 
-### The health check is HTTP, not TCP
+### The health check is HTTP, and it is the legacy kind
 
 ```bash
-gcloud compute health-checks create http http-health-check --port=80 --global
+gcloud compute health-checks create http http-health-check --port=80
 ```
 
-The lab asks for HTTP on port 80, and a global HTTP health check is also
-what the autohealing of a regional instance group accepts.
+The lab asks for HTTP on port 80, and the health check has to be the
+**legacy** one — the kind without a region, which is what the autohealing
+of a regional instance group accepts. Creating it with `--global` gives you
+the newer kind, and the autohealing then fails with *"the health check must
+be a legacy health check"*.
+
+Because that is easy to get wrong, the script detects it: if the autohealing
+refuses the health check, it replaces it with a legacy one and tries again.
+And a failed sub-step never stops the lab — it is reported, counted in the
+summary, and everything after it still runs.
 
 ### The template must not pin a subnet
 

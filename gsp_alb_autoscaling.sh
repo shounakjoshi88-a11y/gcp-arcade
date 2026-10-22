@@ -80,6 +80,11 @@ dim()  { printf "  %s%s%s\n"          "$C_DIM"    "$*"       "$C_RESET"; }
 FAILURES=0
 note_fail() { err "$1"; FAILURES=$((FAILURES + 1)); }
 
+# The autohealing of a regional instance group only accepts a legacy
+# health check. A health check that was created in the newer form has to
+# be replaced, and that is done once.
+HC_REPLACED=0
+
 PROJECT_OVERRIDE=""
 REGION1_OVERRIDE=""
 REGION2_OVERRIDE=""
@@ -447,6 +452,21 @@ run_live() {  # $1 = log file, rest = command
   return $rc
 }
 
+# Run a gcloud command, keep its output and show it when it fails. The
+# error is the whole point - "could not turn on autohealing" without the
+# reason is useless.
+run_capture() {  # $1 = log file, rest = command
+  local log="$1"; shift
+  local rc=0
+  "$@" > "$log" 2>&1 || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    return 0
+  fi
+  dim "  the command that failed:"
+  tail -6 "$log" 2>/dev/null | sed 's/^/    /'
+  return $rc
+}
+
 pause_for_check() {  # $1 = task number, $2 = checkpoint name, $3 = extra note
   if [ "$ASSUME_YES" = "1" ]; then return 0; fi
   echo ""
@@ -517,7 +537,6 @@ task1() {
       ok "created the firewall rule $FW_RULE"
     else
       note_fail "could not create the firewall rule $FW_RULE"
-      return 1
     fi
   fi
   dim "    the health checkers and the load balancer come from $HC_RANGES"
@@ -543,7 +562,6 @@ task2() {
     else
       note_fail "could not create the Cloud Router $NAT_ROUTER"
       dim "  the log is in $WORKDIR/router.log"
-      return 1
     fi
   fi
 
@@ -559,7 +577,6 @@ task2() {
     else
       note_fail "could not create the Cloud NAT $NAT_GW"
       dim "  the log is in $WORKDIR/nat.log"
-      return 1
     fi
   fi
 
@@ -630,7 +647,6 @@ task3() {
     else
       note_fail "could not create the $WEBSERVER VM"
       dim "  the log is in $WORKDIR/webserver.log"
-      return 1
     fi
   else
     ok "the $WEBSERVER VM already exists in $ZONE1"
@@ -663,7 +679,6 @@ task3() {
     ok "stopped the $WEBSERVER VM"
   else
     note_fail "could not stop the $WEBSERVER VM"
-    return 1
   fi
 
   info "creating the image $IMAGE from the boot disk (a couple of minutes)"
@@ -675,7 +690,6 @@ task3() {
   else
     note_fail "could not create the image $IMAGE"
     dim "  the log is in $WORKDIR/image.log"
-    return 1
   fi
 
   info "deleting the $WEBSERVER VM, the image takes its place"
@@ -709,7 +723,7 @@ ensure_mig() {  # $1 = name, $2 = region
     else
       note_fail "could not create the instance group $n"
       dim "  the log is in $WORKDIR/mig-$n.log"
-      return 1
+      return 0
     fi
   fi
 
@@ -717,27 +731,56 @@ ensure_mig() {  # $1 = name, $2 = region
   if gcloud compute instance-groups managed set-named-ports "$n" --region="$region" \
        --named-ports=http:80 --project "$PROJECT_ID" --quiet >/dev/null 2>&1; then
     ok "the named port http:80 is set on $n"
+  else
+    warn "could not set the named port http:80 on $n - the backend may stay unhealthy"
   fi
 
   info "turning on autoscaling for $n"
-  if gcloud compute instance-groups managed set-autoscaling "$n" --region="$region" \
+  if run_capture "$WORKDIR/autoscaling-$n.log" \
+       gcloud compute instance-groups managed set-autoscaling "$n" --region="$region" \
        --min-num-replicas=1 --max-num-replicas=2 \
        --target-load-balancing-utilization=0.8 --cool-down-period=60 \
-       --project "$PROJECT_ID" --quiet >/dev/null 2>&1; then
+       --project "$PROJECT_ID" --quiet; then
     ok "autoscaling on $n: 1 to 2 instances, target 80% load balancing utilization"
   else
     note_fail "could not turn on autoscaling for $n"
-    return 1
   fi
 
   info "turning on autohealing for $n"
-  if gcloud compute instance-groups managed set-autohealing "$n" --region="$region" \
+  if run_capture "$WORKDIR/autohealing-$n.log" \
+       gcloud compute instance-groups managed set-autohealing "$n" --region="$region" \
        --health-check="$HEALTH_CHECK" --initial-delay=60 \
-       --project "$PROJECT_ID" --quiet >/dev/null 2>&1; then
+       --project "$PROJECT_ID" --quiet; then
     ok "autohealing on $n with the health check $HEALTH_CHECK"
+  elif [ "$HC_REPLACED" = "0" ]; then
+    # The health check in the project is probably the newer kind, and the
+    # autohealing only takes a legacy one. Replace it and try again.
+    HC_REPLACED=1
+    warn "the health check $HEALTH_CHECK is not accepted by the autohealing - replacing it"
+    gcloud compute health-checks describe "$HEALTH_CHECK" --project "$PROJECT_ID" \
+      --format="yaml(type,checkIntervalSec,port)" 2>/dev/null | sed 's/^/    /'
+    gcloud compute health-checks delete "$HEALTH_CHECK" \
+      --project "$PROJECT_ID" --quiet >/dev/null 2>&1
+    if run_capture "$WORKDIR/healthcheck.log" gcloud compute health-checks create http "$HEALTH_CHECK" \
+         --port=80 --project "$PROJECT_ID" --quiet; then
+      ok "recreated the health check $HEALTH_CHECK in the legacy form"
+      if run_capture "$WORKDIR/autohealing-$n.log" \
+           gcloud compute instance-groups managed set-autohealing "$n" --region="$region" \
+           --health-check="$HEALTH_CHECK" --initial-delay=60 \
+           --project "$PROJECT_ID" --quiet; then
+        ok "autohealing on $n with the health check $HEALTH_CHECK"
+      else
+        warn "could not turn on autohealing for $n"
+        dim "  the log is in $WORKDIR/autohealing-$n.log"
+      fi
+    else
+      warn "could not recreate the health check $HEALTH_CHECK"
+    fi
   else
-    note_fail "could not turn on autohealing for $n"
-    return 1
+    # A missing autohealing does not stop the lab - the load balancer only
+    # needs the group and the backend service.
+    warn "could not turn on autohealing for $n"
+    dim "  the log is in $WORKDIR/autohealing-$n.log"
   fi
   return 0
 }
@@ -765,14 +808,14 @@ task4() {
 
   if ! hcheck_exists "$HEALTH_CHECK"; then
     info "creating the health check $HEALTH_CHECK (HTTP, port 80)"
-    # The lab uses HTTP, not TCP. A global HTTP health check is also what
-    # the autohealing of a regional instance group accepts.
-    if gcloud compute health-checks create http "$HEALTH_CHECK" \
-         --port=80 --global --project "$PROJECT_ID" --quiet >/dev/null 2>&1; then
+    # The lab uses HTTP, not TCP. The legacy HTTP health check is the one
+    # that the autohealing of a regional instance group accepts, so it is
+    # created without --global.
+    if run_capture "$WORKDIR/healthcheck.log" gcloud compute health-checks create http "$HEALTH_CHECK" \
+         --port=80 --project "$PROJECT_ID" --quiet; then
       ok "created the health check $HEALTH_CHECK"
     else
       note_fail "could not create the health check $HEALTH_CHECK"
-      return 1
     fi
   else
     ok "the health check $HEALTH_CHECK already exists"
@@ -795,14 +838,13 @@ task4() {
     else
       note_fail "could not create the instance template $TEMPLATE"
       dim "  the log is in $WORKDIR/template.log"
-      return 1
     fi
   else
     ok "the instance template $TEMPLATE already exists"
   fi
 
-  ensure_mig "$MIG1" "$REGION1" || return 1
-  ensure_mig "$MIG2" "$REGION2" || return 1
+  ensure_mig "$MIG1" "$REGION1"
+  ensure_mig "$MIG2" "$REGION2"
 
   wait_for_mig "$MIG1" "$REGION1"
   wait_for_mig "$MIG2" "$REGION2"
@@ -826,14 +868,14 @@ add_backend() {  # $1 = backend service, $2 = mig, $3 = region, $4 = mode, $5 = 
   fi
   info "attaching the $mig ($mode) to the backend service $bs"
   # shellcheck disable=SC2086
-  if gcloud compute backend-services add-backend "$bs" \
+  if run_capture "$WORKDIR/backend-$mig.log" gcloud compute backend-services add-backend "$bs" \
        --instance-group="$mig" --instance-group-region="$region" \
        $extra --capacity-scaler=1.0 \
-       --global --project "$PROJECT_ID" --quiet >/dev/null 2>&1; then
+       --global --project "$PROJECT_ID" --quiet; then
     ok "attached the $mig to $bs"
   else
     note_fail "could not attach the $mig to $bs"
-    return 1
+    warn "  the instance group $mig has to exist in $region - run task 4 again"
   fi
   return 0
 }
@@ -856,15 +898,22 @@ task5() {
       ok "created the backend service $BACKEND"
     else
       note_fail "could not create the backend service $BACKEND"
-      return 1
     fi
   else
     ok "the backend service $BACKEND already exists"
   fi
 
+  # The health check may have been replaced in task 4, so point the backend
+  # service at the one that is in the project now.
+  if gcloud compute backend-services update "$BACKEND" --global \
+       --health-checks="$HEALTH_CHECK" --global-health-checks \
+       --project "$PROJECT_ID" --quiet >/dev/null 2>&1; then
+    ok "the backend service uses the health check $HEALTH_CHECK"
+  fi
+
   # The first group is rate based, the second one is utilization based.
-  add_backend "$BACKEND" "$MIG1" "$REGION1" RATE 50 || return 1
-  add_backend "$BACKEND" "$MIG2" "$REGION2" UTILIZATION 0.8 || return 1
+  add_backend "$BACKEND" "$MIG1" "$REGION1" RATE 50
+  add_backend "$BACKEND" "$MIG2" "$REGION2" UTILIZATION 0.8
 
   if ! urlmap_exists "$URL_MAP"; then
     info "creating the URL map $URL_MAP"
@@ -873,7 +922,6 @@ task5() {
       ok "created the URL map $URL_MAP"
     else
       note_fail "could not create the URL map $URL_MAP"
-      return 1
     fi
   else
     ok "the URL map $URL_MAP already exists"
@@ -886,7 +934,6 @@ task5() {
       ok "created the target HTTP proxy $PROXY"
     else
       note_fail "could not create the target HTTP proxy $PROXY"
-      return 1
     fi
   else
     ok "the target HTTP proxy $PROXY already exists"
@@ -900,7 +947,6 @@ task5() {
       ok "created the IPv4 forwarding rule $FW_IPV4"
     else
       note_fail "could not create the IPv4 forwarding rule $FW_IPV4"
-      return 1
     fi
   else
     ok "the IPv4 forwarding rule $FW_IPV4 already exists"
@@ -914,7 +960,6 @@ task5() {
       ok "created the IPv6 forwarding rule $FW_IPV6"
     else
       note_fail "could not create the IPv6 forwarding rule $FW_IPV6"
-      return 1
     fi
   else
     ok "the IPv6 forwarding rule $FW_IPV6 already exists"
@@ -965,7 +1010,6 @@ task6() {
   ip4="$(lb_ip "$FW_IPV4")"
   if [ -z "$ip4" ]; then
     note_fail "the forwarding rule $FW_IPV4 has no IP yet - run task 5 first"
-    return 1
   fi
   ok "the load balancer is at http://$ip4/"
 
@@ -983,7 +1027,6 @@ task6() {
     else
       note_fail "could not create the stress test VM $STRESS_VM"
       dim "  the log is in $WORKDIR/stress.log"
-      return 1
     fi
   else
     ok "the stress test VM $STRESS_VM already exists in $STRESS_ZONE"
@@ -1005,7 +1048,6 @@ task6() {
   done
   if [ "$status" != "RUNNING" ]; then
     warn "the stress test VM is '${status:-unknown}', not RUNNING yet"
-    return 1
   fi
 
   info "installing ApacheBench on the stress test VM"
