@@ -2040,10 +2040,23 @@ all three checkpoints are scriptable.
 | 4 | `kubectl create deployment hello-app`, waits for the Pod, then `kubectl expose … --type=LoadBalancer --port=80 --target-port=8080` ⏸⏸ |
 | 5 | Prints the three knowledge-check answers |
 
-### The zone is fixed by the lab
+### The zone changes per run
 
-`gcloud config set compute/zone us-east4-a` is in the lab text, so that is the
-default. `--zone` or `$ZONE` still wins.
+The lab text names a zone, but it differs run to run (`us-west1-c` in one run,
+`us-east4-a` in the copy this script was first built from), and the project
+carries an org policy — `constraints/gcp.resourceLocations` — that rejects
+anything else with `code=400 … violates constraint`. So the script resolves the
+zone in this order:
+
+1. `--zone`
+2. `$ZONE`
+3. the project metadata (`google-compute-default-zone`)
+4. the region the org policy allows, as `<region>-c`, then `-b`, then `-a`
+5. `us-west1-c`, with a warning
+
+If `gcloud container clusters create` still comes back with `violates
+constraint`, task 1 retries once in the zone from steps 3–4 before reporting a
+failure.
 
 ### gcr.io is being retired, so there is a fallback
 
@@ -2064,7 +2077,7 @@ run with a heartbeat every 20 s, and the cluster wait is bounded by `--timeout`.
 | Flag | Default | What it does |
 |---|---|---|
 | `--project ID` | active gcloud project | Target project |
-| `--zone ZONE` | `$ZONE`, else `us-east4-a` | The cluster's zone |
+| `--zone ZONE` | `$ZONE`, else project metadata, else the zone the org policy allows | The cluster's zone |
 | `--task N` | all | Run only task N (1–5) |
 | `--yes` | off | Do not pause at the checkpoints |
 | `--timeout MIN` | 30 | Cluster/build wait budget |

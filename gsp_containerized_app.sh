@@ -17,7 +17,7 @@
 #
 #  OPTIONS:
 #     --project ID   GCP project (default: active gcloud project)
-#     --zone ZONE    the lab's zone (default: $ZONE, else us-east4-a)
+#     --zone ZONE    the lab's zone (default: $ZONE, else discovered)
 #     --task N       run only task N (1-5)
 #     --yes          do not pause at the checkpoints
 #     --timeout MIN  cluster wait budget (default: 30)
@@ -29,7 +29,9 @@
 #     3. Allow external traffic to hello-app deployment       (after expose)
 #
 #  NOTES:
-#   * The lab fixes the zone: `gcloud config set compute/zone us-east4-a`.
+#   * The zone changes per run: --zone, $ZONE, the project metadata, or the
+#     region the project's org policy allows. The policy rejects any other zone
+#     with "violates constraint constraints/gcp.resourceLocations".
 #   * The lab pushes to Container Registry (gcr.io). Google has been retiring
 #     gcr.io, so if that push fails the script falls back to Artifact Registry
 #     in the same region and deploys the image from there. The Deployment is
@@ -75,7 +77,7 @@ QUICK START (Google Cloud Shell):
 
 OPTIONS:
    --project ID   GCP project (default: active gcloud project)
-   --zone ZONE    the lab's zone (default: $ZONE, else us-east4-a)
+   --zone ZONE    the lab's zone (default: $ZONE, else discovered)
    --task N       run only task N (1-5)
    --yes          do not pause at the checkpoints
    --timeout MIN  cluster wait budget (default: 30)
@@ -107,14 +109,63 @@ if [ -z "$PROJECT_ID" ] || [ "$PROJECT_ID" = "(unset)" ]; then
   exit 1
 fi
 
+# The lab's zone changes per run, and an org policy
+# (constraints/gcp.resourceLocations) rejects any zone outside it. Precedence:
+# --zone, $ZONE, the project metadata, then the allowed region from that policy.
+policy_region() {
+  local vals
+  vals="$(gcloud resource-manager org-policies describe constraints/gcp.resourceLocations \
+            --project "$PROJECT_ID" --effective --format="value(listPolicy.allowedValues)" 2>/dev/null)"
+  echo "$vals" | tr ',' '\n' | grep -o 'in:[a-z0-9-]*-locations' \
+    | head -n1 | sed 's/^in://; s/-locations$//'
+}
+
+pick_zone_in() {  # $1 = region -> first available -c/-b/-a zone
+  local r="$1" z
+  for z in c b a; do
+    if gcloud compute zones list --filter="name=$r-$z" --format="value(name)" 2>/dev/null | grep -qx "$r-$z"; then
+      echo "$r-$z"; return 0
+    fi
+  done
+  echo "$r-a"
+}
+
+suggest_zone() {  # a better zone than $ZONE, if one can be worked out
+  if [ -n "${META_ZONE:-}" ] && [ "$META_ZONE" != "$ZONE" ]; then
+    echo "$META_ZONE"; return 0
+  fi
+  local pr z
+  pr="$(policy_region)"
+  if [ -n "$pr" ]; then
+    z="$(pick_zone_in "$pr")"
+    if [ -n "$z" ] && [ "$z" != "$ZONE" ]; then echo "$z"; return 0; fi
+  fi
+  return 1
+}
+
+if [ -z "${META_ZONE:-}" ]; then
+  META_ZONE="$(gcloud compute project-info describe \
+    --format='value(commonInstanceMetadata.items[google-compute-default-zone])' 2>/dev/null | tr -d '\r')"
+fi
+
 if [ -n "$ZONE_OVERRIDE" ]; then
   ZONE="$ZONE_OVERRIDE"
   info "zone from --zone: $ZONE"
 elif [ -n "${ZONE:-}" ]; then
   info "zone from the environment: $ZONE"
+elif [ -n "${META_ZONE:-}" ]; then
+  ZONE="$META_ZONE"
+  info "the lab's zone, from the project metadata: $ZONE"
 else
-  ZONE="us-east4-a"
-  info "the lab's zone: $ZONE (override with --zone)"
+  POLICY_REGION="$(policy_region)"
+  if [ -n "$POLICY_REGION" ]; then
+    ZONE="$(pick_zone_in "$POLICY_REGION")"
+    info "the org policy only allows $POLICY_REGION, so the zone is $ZONE"
+  else
+    ZONE="us-west1-c"
+    warn "no zone in the project metadata and no org-policy hint"
+    dim "  using the zone this lab text showed (us-west1-c) - override with --zone"
+  fi
 fi
 
 REGION="${ZONE%-*}"
@@ -228,6 +279,12 @@ preflight() {
 # ---------------------------------------------------------------------------
 # Task 1 - the cluster
 # ---------------------------------------------------------------------------
+try_create_cluster() {
+  run_live "$WORKDIR/cluster-create.log" \
+    gcloud container clusters create "$CLUSTER" --zone "$ZONE" \
+      --project "$PROJECT_ID" --num-nodes=3 --quiet
+}
+
 task1() {
   step "Task 1 - Create the Kubernetes cluster"
 
@@ -238,22 +295,42 @@ task1() {
     dim "  this usually takes 3-6 minutes; gcloud's output is streamed below"
     MAX_SECONDS=$((WAIT_MIN * 60))
     local rc=0
-    if run_live "$WORKDIR/cluster-create.log" \
-         gcloud container clusters create "$CLUSTER" --zone "$ZONE" \
-           --project "$PROJECT_ID" --num-nodes=3 --quiet; then
-      ok "the cluster $CLUSTER is up"
-    else
-      rc=$?
-      if [ "$rc" = "124" ]; then
-        warn "the cluster was still being created after ${WAIT_MIN} minutes"
-        dim "  re-run with a longer --timeout, or check Kubernetes Engine > Clusters"
-      else
-        local e; e="$(tail_error "$WORKDIR/cluster-create.log")"
-        [ -n "$e" ] && err "$e"
-        note_fail "could not create the cluster - full log: $WORKDIR/cluster-create.log"
+    try_create_cluster
+    rc=$?
+
+    # An org policy can forbid the zone outright. The lab's own zone is in the
+    # project metadata (or the policy itself), so try that once before giving up.
+    if [ "$rc" != "0" ] && [ "$rc" != "124" ] \
+       && grep -qi "violates constraint" "$WORKDIR/cluster-create.log" 2>/dev/null; then
+      local alt
+      alt="$(suggest_zone || true)"
+      if [ -n "$alt" ]; then
+        warn "the project's org policy does not allow $ZONE"
+        info "retrying in $alt"
+        ZONE="$alt"
+        REGION="${ZONE%-*}"
+        AR_IMAGE="${REGION}-docker.pkg.dev/$PROJECT_ID/hello-repo/hello-app:1.0"
+        gcloud config set compute/zone "$ZONE" >/dev/null 2>&1
+        try_create_cluster
+        rc=$?
       fi
     fi
     MAX_SECONDS=0
+
+    if [ "$rc" = "0" ]; then
+      ok "the cluster $CLUSTER is up in $ZONE"
+    elif [ "$rc" = "124" ]; then
+      warn "the cluster was still being created after ${WAIT_MIN} minutes"
+      dim "  re-run with a longer --timeout, or check Kubernetes Engine > Clusters"
+    else
+      local e; e="$(tail_error "$WORKDIR/cluster-create.log")"
+      [ -n "$e" ] && err "$e"
+      if grep -qi "violates constraint" "$WORKDIR/cluster-create.log" 2>/dev/null; then
+        dim "  this project's org policy restricts zones. The lab's zone is on the"
+        dim "  setup panel - pass it with --zone. Metadata says: ${META_ZONE:-nothing}"
+      fi
+      note_fail "could not create the cluster - full log: $WORKDIR/cluster-create.log"
+    fi
   fi
 
   if cluster_exists; then
@@ -519,7 +596,9 @@ task5() {
   step "Task 5 - Test your understanding (answers)"
   cat <<'ANSWERS'
     1. docker push publishes the container image in Google Cloud to ...
-       -> Container Registry
+       -> Artifact Registry
+          (this lab's text calls it Artifact Registry; the older copy said
+          Container Registry, and the commands still push to gcr.io)
 
     2. Kubernetes is an open-source container-orchestration system for
        automating deployment, scaling and management of containerized

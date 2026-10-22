@@ -5,7 +5,8 @@ lab is Cloud Shell commands, so every graded objective is scriptable.
 
 ```bash
 export PROJECT_ID=$(gcloud config get-value project)
-export ZONE=us-east4-a          # the lab fixes this zone
+export ZONE=$(gcloud compute project-info describe \
+  --format="value(commonInstanceMetadata.items[google-compute-default-zone])")   # the lab assigns this per run
 ```
 
 ---
@@ -13,7 +14,7 @@ export ZONE=us-east4-a          # the lab fixes this zone
 ## Task 1 — Creating a cluster
 
 ```bash
-gcloud config set compute/zone us-east4-a
+gcloud config set compute/zone "$ZONE"        # this run said us-west1-c
 gcloud container clusters create hello-world
 ```
 
@@ -94,7 +95,7 @@ Click **Check my progress** — *Allow external traffic to hello-app deployment.
 
 | Question | Answer |
 |---|---|
-| `docker push` publishes the container image in Google Cloud to … | **Container Registry** |
+| `docker push` publishes the container image in Google Cloud to … | **Artifact Registry** |
 | Kubernetes is an open-source container-orchestration system for automating deployment, scaling and management of containerized applications. | **True** |
 | In Kubernetes, `kubectl expose` creates a …, the forwarding rules for the load balancer, and the firewall rules that allow external traffic. | **Service** |
 
