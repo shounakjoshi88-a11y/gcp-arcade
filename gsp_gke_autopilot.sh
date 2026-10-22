@@ -3,10 +3,13 @@
 #  "Deploying GKE Autopilot Clusters"
 #  Google Cloud Arcade / Cloud Skills Boost lab (console version, GKE course).
 #
-#  The lab is click-through, but the two graded objectives are just two
-#  resources, so this does them with gcloud and kubectl:
-#    1  the regional Autopilot cluster autopilot-cluster-1
-#    2  the nginx-1 deployment: nginx:latest, three Pods
+#  The lab is click-through. One of its two graded objectives can be automated,
+#  the other cannot - this was tested, not assumed:
+#    1  the regional Autopilot cluster autopilot-cluster-1   -> gcloud, scores
+#    2  the nginx-1 deployment: nginx:latest, three Pods     -> must be created
+#       from the console. A field-for-field identical Deployment built with
+#       kubectl is rejected by the checkpoint (0 points, same message), and the
+#       same object made in the UI scores 50/50. So task 2 explains the clicks.
 #    3  the inspection data the lab has you click through in the console,
 #       printed as kubectl output (details, revisions, events, Pod YAML)
 #
@@ -24,8 +27,8 @@
 #     -h, --help        this help
 #
 #  CHECKPOINTS (the two graded objectives):
-#     1. Deploy GKE cluster                     (end of task 1)
-#     2. Deploy a sample nginx workload         (end of task 2)
+#     1. Deploy GKE Autopilot cluster             (script does it)
+#     2. Deploy a sample nginx workload           (console, clicks below)
 #
 #  NOTES:
 #   * Autopilot clusters are regional. The lab injects the region per run, and
@@ -278,78 +281,68 @@ task1() {
     note_fail "could not fetch the cluster credentials"
   fi
 
-  pause_for_check 1 "Deploy GKE cluster"
+  pause_for_check 1 "Deploy GKE Autopilot cluster"
 }
 
 # ---------------------------------------------------------------------------
 # Task 2 - the nginx-1 workload
 # ---------------------------------------------------------------------------
 task2() {
-  step "Task 2 - Deploy the sample nginx workload"
+  step "Task 2 - Deploy the sample nginx workload (console only)"
 
   if ! cluster_exists; then
     note_fail "the cluster $CLUSTER is missing, so there is nothing to deploy onto"
     return 0
   fi
 
-  # The lab's console default is the literal image string "nginx:latest". A
-  # bare "--image=nginx" records the spec as "nginx", which the grader does not
-  # accept, so the tag is pinned explicitly here and repaired if it drifted.
+  # Measured, not guessed. This checkpoint rejects a Deployment built with
+  # kubectl even when it is field-for-field what the console produces: name
+  # nginx-1, image nginx:latest, container name nginx-1, app=nginx-1 labels,
+  # 3 replicas, 3 running Pods, in default on this cluster, revision 1.
+  # The identical object created from the console scores 50/50. Task 1 is
+  # resource-based and gcloud satisfies it, so only this step has to be clicked.
   if kubectl get deployment nginx-1 >/dev/null 2>&1; then
-    ok "the deployment nginx-1 already exists"
-    local want=3 have cname img
-    have="$(kubectl get deployment nginx-1 -o jsonpath='{.spec.replicas}' 2>/dev/null)"
-    cname="$(kubectl get deployment nginx-1 -o jsonpath='{.spec.template.spec.containers[0].name}' 2>/dev/null)"
-    img="$(kubectl get deployment nginx-1 -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)"
-    [ -z "$cname" ] && cname=nginx
-
-    if [ "$img" != "nginx:latest" ]; then
-      info "the workload runs '$img'; the lab's console default is nginx:latest - updating"
-      if kubectl set image "deployment/nginx-1" "${cname}=nginx:latest" > "$WORKDIR/setimage.log" 2>&1; then
-        ok "nginx-1 now runs nginx:latest"
-      else
-        err "$(tail -n 2 "$WORKDIR/setimage.log" 2>/dev/null | tr '\n' ' ')"
-        note_fail "could not pin the image to nginx:latest"
-      fi
-    else
-      ok "nginx-1 runs nginx:latest"
-    fi
-
-    if [ "$have" != "$want" ]; then
-      info "scaling nginx-1 from $have to $want replicas, as the console default does"
-      kubectl scale deployment nginx-1 --replicas="$want" >/dev/null 2>&1 \
-        && ok "nginx-1 scaled to $want replicas" \
-        || note_fail "could not scale nginx-1"
-    fi
-  else
-    info "creating the deployment nginx-1 (nginx:latest, 3 replicas)"
-    if kubectl create deployment nginx-1 --image=nginx:latest --replicas=3 > "$WORKDIR/deploy.log" 2>&1; then
-      ok "the deployment nginx-1 is created"
-    else
-      err "$(tail -n 2 "$WORKDIR/deploy.log" 2>/dev/null | tr '\n' ' ')"
-      note_fail "could not create the deployment nginx-1"
-    fi
+    warn "a Deployment called nginx-1 already exists"
+    dim "  if kubectl created it, the checkpoint will not accept it - and the console"
+    dim "  refuses the name while it is there, so delete it first:"
+    dim "    kubectl delete deployment nginx-1 --ignore-not-found"
+    dim "    kubectl delete service nginx-1 --ignore-not-found"
+    echo ""
   fi
 
-  info "waiting for the three Pods to become ready"
-  if kubectl rollout status deployment/nginx-1 --timeout=600s > "$WORKDIR/rollout.log" 2>&1; then
-    ok "the rollout finished"
-  else
-    warn "the rollout did not confirm inside 10 minutes"
-    dim "  $(tail -n 2 "$WORKDIR/rollout.log" 2>/dev/null | tr '\n' ' ')"
-    dim "  Autopilot is still provisioning nodes - the Pods will come up shortly"
-  fi
-
+  cat <<'CONSOLE_STEPS'
+    In the console:
+      1. Navigation menu > Kubernetes Engine > Workloads
+      2. Click "Create deployment"
+      3. Deployment name:        nginx-1
+      4. Container image:        leave it at nginx:latest (three Pods)
+      5. Configuration details:  leave at the defaults
+      6. Click "Deploy"
+      7. On the nginx-1 details page, click "Check my progress"
+CONSOLE_STEPS
   echo ""
-  kubectl get deployment nginx-1 2>/dev/null | sed 's/^/    /'
-  kubectl get pods -l app=nginx-1 2>/dev/null | sed 's/^/    /'
-  local final_img
-  final_img="$(kubectl get deployment nginx-1 -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)"
-  if [ -n "$final_img" ]; then
-    dim "  the workload's image is '$final_img' - the grader looks for nginx:latest"
+
+  if [ "$ASSUME_YES" != "1" ]; then
+    printf "  %sPress Enter once the console shows the nginx-1 deployment.%s\n" "$C_YELLOW" "$C_RESET"
+    printf "  %s    >%s" "$C_YELLOW" "$C_RESET"
+    read -r _ || true
   fi
 
-  pause_for_check 2 "Deploy a sample nginx workload"
+  if kubectl get deployment nginx-1 >/dev/null 2>&1; then
+    local ready
+    ready="$(kubectl get deployment nginx-1 -o jsonpath='{.status.availableReplicas}' 2>/dev/null)"
+    kubectl get deployment nginx-1 2>/dev/null | sed 's/^/    /'
+    kubectl get pods -l app=nginx-1 2>/dev/null | sed 's/^/    /'
+    if [ "${ready:-0}" = "3" ]; then
+      ok "the console deployment is up, 3 of 3 Pods available"
+    else
+      warn "only ${ready:-0} of 3 Pods are available so far"
+      dim "  wait for 3/3 in the console before clicking Check my progress"
+    fi
+  else
+    warn "nginx-1 is not visible to kubectl yet"
+    dim "  if the console shows it, give it a few seconds - the check reads the cluster"
+  fi
 }
 
 # ---------------------------------------------------------------------------
@@ -418,11 +411,11 @@ step "Summary"
 echo "  Project   : $PROJECT_ID"
 echo "  Region    : $REGION"
 echo "  Cluster   : $CLUSTER (Autopilot, regional)"
-echo "  Workload  : nginx-1 (nginx:latest, 3 replicas)"
+echo "  Workload  : nginx-1 (created from the console - see task 2)"
 echo ""
 echo "  Checkpoints:"
-echo "    1. Deploy GKE cluster"
-echo "    2. Deploy a sample nginx workload"
+echo "    1. Deploy GKE Autopilot cluster     - done by this script"
+echo "    2. Deploy a sample nginx workload   - console clicks in task 2"
 echo ""
 if [ "$FAILURES" -eq 0 ]; then
   printf "  %sAll steps completed.%s\n" "$C_GREEN" "$C_RESET"

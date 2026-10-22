@@ -23,7 +23,7 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp_console_shell.sh`](./gsp_console_shell.sh) | **Explore the Google Cloud Console and Cloud Shell** | The console bucket, the Cloud Shell bucket, the file upload, and the persistent environment variables | — |
 | [`gsp_access_console_shell.sh`](./gsp_access_console_shell.sh) | **Accessing the Google Cloud Console and Cloud Shell** | The `first-vm` instance with the `http-server` tag, the service account with the Editor role, the two buckets, the cat image and nginx | — |
 | [`gsp_cloud_build.sh`](./gsp_cloud_build.sh) | **Working with Cloud Build** | `quickstart-docker-repo`, the `quickstart.sh` + `Dockerfile` image, `cloudbuild.yaml`, and the `cloudbuild2.yaml` build that fails its own test step on purpose | — |
-| [`gsp_gke_autopilot.sh`](./gsp_gke_autopilot.sh) | **Deploying GKE Autopilot Clusters** | The regional `autopilot-cluster-1` cluster and the `nginx-1` deployment with three Pods, plus the kubectl output behind every console tab in task 3 | — |
+| [`gsp_gke_autopilot.sh`](./gsp_gke_autopilot.sh) | **Deploying GKE Autopilot Clusters** | The regional `autopilot-cluster-1` cluster (scripted) and the `nginx-1` workload, which the grader only accepts when created from the console, plus the kubectl output behind every console tab in task 3 | 100/100 |
 | [`gsp_ha_vpn.sh`](./gsp_ha_vpn.sh) | **Configure Google Cloud HA VPN** | The two VPCs, the HA VPN gateways, the Cloud Routers, the four tunnels, the BGP peering and global dynamic routing | — |
 | [`gsp_alb_autoscaling.sh`](./gsp_alb_autoscaling.sh) | **Configure an Application Load Balancer with Autoscaling** | The health check rule, the Cloud NAT, the custom web server image, two instance groups and the IPv4/IPv6 load balancer | — |
 | [`gsp_internal_lb.sh`](./gsp_internal_lb.sh) | **Configure an Internal Network Load Balancer** | The lb-access and health-check rules, the Cloud NAT, the two instance templates, the two instance groups and the internal load balancer at `10.10.30.5` | — |
@@ -1972,25 +1972,29 @@ chmod +x gsp_gke_autopilot.sh
 | Task | What the script does |
 |---|---|
 | 1 | Enables the Kubernetes Engine API, creates the regional `autopilot-cluster-1`, waits for it, then pulls the kubeconfig ⏸ |
-| 2 | `kubectl create deployment nginx-1 --image=nginx --replicas=3`, waits for the rollout, prints the deployment and Pods ⏸ |
+| 2 | **Console only.** Prints the exact clicks (*Workloads → Create deployment → `nginx-1` → Deploy*), warns you if a kubectl-created `nginx-1` is in the way, then reads the Deployment back and confirms 3/3 Pods |
 | 3 | Prints the kubectl equivalent of every tab the lab has you click: details, revision history, events, YAML, the managed Pod |
+
+### Checkpoint 2 only accepts a console-created workload
+
+Task 1 is resource-based — `gcloud container clusters create-auto` scores it. Task 2 is **not**. Tested on a live lab:
+
+| How `nginx-1` was created | Checkpoint 2 |
+|---|---|
+| `kubectl create deployment nginx-1 --image=nginx:latest --replicas=3` | 0 points |
+| `kubectl create deployment` + `kubectl set image … nginx:latest` | 0 points |
+| Applied YAML: container name `nginx-1`, `app=nginx-1` labels, 3 replicas, port 80, ClusterIP Service, revision 1 | 0 points |
+| Same names in the console: **Workloads → Create deployment → `nginx-1` → Deploy** | **50/50** |
+
+The last two were the same cluster minutes apart, so the object contents are not the discriminator — the grader wants the console's own action. That is why the script stops and hands you the clicks instead of deploying it for you: a kubectl-created `nginx-1` also blocks the console from using the name, so task 2 tells you to delete it first.
 
 ### This is the console variant
 
 The repo also covers *Deploying GKE Autopilot Clusters **from Cloud Shell***,
 which is a different lab with different checkpoints (*Deploy GKE clusters*,
 *Deploy Pods to GKE clusters*, *Deploy a new pod using a Yaml file*). This
-script is for the console lab: **Deploy GKE cluster** and **Deploy a sample
-nginx workload**.
-
-### The image string has to be literally `nginx:latest`
-
-The console default records the container image as `nginx:latest`. A bare
-`--image=nginx` records it as `nginx` instead, and the grader rejects that —
-task 2 comes back with *Please Deploy a sample nginx workload* even though the
-Deployment, its three Pods and the name are all correct. The script pins the
-tag, repairs an existing workload whose image drifted, and prints the image it
-ended up with so you can see it.
+script is for the console lab: **Deploy GKE Autopilot cluster** and **Deploy a
+sample nginx workload**.
 
 ### Autopilot is regional
 

@@ -13,7 +13,7 @@ is not something to guess.
 
 ---
 
-## Task 1 — Deploy GKE clusters
+## Task 1 — Deploy GKE Autopilot cluster
 
 Console: **Kubernetes Engine → Clusters → Create**, then:
 
@@ -27,7 +27,7 @@ Autopilot is **regional by default** — the control plane spans zones and Googl
 provisions and scales nodes for you. There are no node pools, machine types or
 node counts to set, which is why the console dialog does not ask for them.
 
-CLI equivalent:
+CLI equivalent — this one scores, resource-based:
 
 ```bash
 gcloud container clusters create-auto autopilot-cluster-1 --region "$REGION"
@@ -37,7 +37,7 @@ gcloud container clusters get-credentials autopilot-cluster-1 --region "$REGION"
 
 Provisioning takes 5–15 minutes. When the cluster row shows a green check:
 
-Click **Check my progress** — *Deploy GKE cluster*.
+Click **Check my progress** — *Deploy GKE Autopilot cluster*.
 
 Then open the cluster and look at the **Storage** tab, as the lab asks.
 
@@ -53,27 +53,30 @@ Console: **Kubernetes Engine → Workloads → Create deployment**
 | Container image | `nginx:latest` (the default) |
 | Configuration details | defaults (3 replicas) |
 
-The image must be the literal string **`nginx:latest`**. Plain `--image=nginx`
-records it as `nginx` and the checkpoint fails with *Please Deploy a sample
-nginx workload*.
+**Do this one in the console.** It is the only step in either of these GKE labs
+that a script cannot score. Measured on a live lab:
 
-CLI equivalent:
+| How `nginx-1` was created | *Deploy a sample nginx workload* |
+|---|---|
+| `kubectl create deployment nginx-1 --image=nginx --replicas=3` | 0 |
+| `kubectl create deployment --image=nginx:latest` | 0 |
+| `kubectl set image deployment/nginx-1 nginx=nginx:latest` | 0 |
+| YAML: container `nginx-1`, `app=nginx-1`, 3 replicas, port 80, ClusterIP Service, revision 1 | 0 |
+| Console: Workloads → Create deployment → `nginx-1` → Deploy | **pass** |
+
+The YAML row and the console row were the same cluster a few minutes apart, with
+the same names, image, labels and replica count — so the grader is keyed to the
+console action, not to the object. Don't spend lab time on the CLI route.
+
+If a kubectl-created `nginx-1` is already there, the console refuses the name.
+Clear it first:
 
 ```bash
-kubectl create deployment nginx-1 --image=nginx:latest --replicas=3
-kubectl rollout status deployment/nginx-1
-kubectl get pods -l app=nginx-1
-kubectl get deployment nginx-1 -o jsonpath='{.spec.template.spec.containers[0].image}'   # nginx:latest
+kubectl delete deployment nginx-1 --ignore-not-found
+kubectl delete service nginx-1 --ignore-not-found
 ```
 
-If you already deployed it with a bare `nginx`, repair it in place:
-
-```bash
-kubectl set image deployment/nginx-1 nginx=nginx:latest
-kubectl rollout status deployment/nginx-1
-```
-
-Click **Check my progress** — *Deploy a sample nginx workload*.
+Then click **Check my progress** — *Deploy a sample nginx workload*.
 
 ---
 
