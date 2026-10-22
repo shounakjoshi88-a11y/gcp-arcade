@@ -23,6 +23,7 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp_console_shell.sh`](./gsp_console_shell.sh) | **Explore the Google Cloud Console and Cloud Shell** | The console bucket, the Cloud Shell bucket, the file upload, and the persistent environment variables | — |
 | [`gsp_ha_vpn.sh`](./gsp_ha_vpn.sh) | **Configure Google Cloud HA VPN** | The two VPCs, the HA VPN gateways, the Cloud Routers, the four tunnels, the BGP peering and global dynamic routing | — |
 | [`gsp_alb_autoscaling.sh`](./gsp_alb_autoscaling.sh) | **Configure an Application Load Balancer with Autoscaling** | The health check rule, the Cloud NAT, the custom web server image, two instance groups and the IPv4/IPv6 load balancer | — |
+| [`gsp_internal_lb.sh`](./gsp_internal_lb.sh) | **Configure an Internal Network Load Balancer** | The lb-access and health-check rules, the Cloud NAT, the two instance templates, the two instance groups and the internal load balancer at `10.10.30.5` | — |
 
 *Score* is what the lab console reported after running the script.
 
@@ -1842,6 +1843,7 @@ gsp_cloudrun.sh       # Hello Cloud Run
 gsp_console_shell.sh  # Explore the Google Cloud Console and Cloud Shell
 gsp_ha_vpn.sh          # Configure Google Cloud HA VPN
 gsp_alb_autoscaling.sh # Configure an Application Load Balancer with Autoscaling
+gsp_internal_lb.sh     # Configure an Internal Network Load Balancer
 TASKS.md              # GSP321, task by task, for manual runs
 TASKS156.md           # GSP156, task by task, for manual runs
 TASKS345.md           # GSP345, task by task, for manual runs
@@ -1860,6 +1862,7 @@ TASKS_cloudrun.md     # Hello Cloud Run, task by task, for manual runs
 TASKS_console_shell.md # Explore the Google Cloud Console and Cloud Shell, by hand
 TASKS_ha_vpn.md       # Configure Google Cloud HA VPN, by hand
 TASKS_alb_autoscaling.md # Configure an Application Load Balancer with Autoscaling, by hand
+TASKS_internal_lb.md     # Configure an Internal Network Load Balancer, by hand
 README.md             # this file
 LICENSE               # MIT
 ```
