@@ -139,6 +139,10 @@ kubectl logs new-nginx -f --timestamps       # tab 3
 
 ## Notes
 
+- **Passed in full.** The run that completed the Google Cloud Engineering
+  Certificate path cleared all three checkpoints (*Deploy GKE clusters*,
+  *Deploy Pods to GKE clusters*, *Deploy a new pod using a Yaml file*) — the
+  certificate does not issue unless every lab in the path is complete.
 - **No knowledge check** in this lab, so there are no answers to record.
 - The lab's `kubectl create deployment --image nginx nginx-1` uses the bare
   `nginx` tag; the script keeps it that way. Autopilot's admission controller

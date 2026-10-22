@@ -24,7 +24,7 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp_access_console_shell.sh`](./gsp_access_console_shell.sh) | **Accessing the Google Cloud Console and Cloud Shell** | The `first-vm` instance with the `http-server` tag, the service account with the Editor role, the two buckets, the cat image and nginx | — |
 | [`gsp_cloud_build.sh`](./gsp_cloud_build.sh) | **Working with Cloud Build** | `quickstart-docker-repo`, the `quickstart.sh` + `Dockerfile` image, `cloudbuild.yaml`, and the `cloudbuild2.yaml` build that fails its own test step on purpose | — |
 | [`gsp_gke_autopilot.sh`](./gsp_gke_autopilot.sh) | **Deploying GKE Autopilot Clusters** | The regional `autopilot-cluster-1` cluster (scripted) and the `nginx-1` workload, which the grader only accepts when created from the console, plus the kubectl output behind every console tab in task 3 | 100/100 |
-| [`gsp_gke_autopilot_shell.sh`](./gsp_gke_autopilot_shell.sh) | **Deploying GKE Autopilot Clusters from Cloud Shell** | The same regional `autopilot-cluster-1` cluster from the CLI, the `nginx-1` Deployment, the `test.html` copied into its Pod, the Pod's LoadBalancer with a reachable page, and the `new-nginx` Pod from the YAML manifest | - |
+| [`gsp_gke_autopilot_shell.sh`](./gsp_gke_autopilot_shell.sh) | **Deploying GKE Autopilot Clusters from Cloud Shell** | The same regional `autopilot-cluster-1` cluster from the CLI, the `nginx-1` Deployment, the `test.html` copied into its Pod, the Pod's LoadBalancer with a reachable page, and the `new-nginx` Pod from the YAML manifest | 100/100 |
 | [`gsp_containerized_app.sh`](./gsp_containerized_app.sh) | **Running a Containerized App on Google Kubernetes Engine** (GSP015) | The `hello-world` cluster, the `hello-app` image built from the sample Dockerfile and pushed to a registry (gcr.io, with an Artifact Registry fallback), its Deployment, and the LoadBalancer on 80→8080 with a reachable external IP | — |
 | [`gsp_ha_vpn.sh`](./gsp_ha_vpn.sh) | **Configure Google Cloud HA VPN** | The two VPCs, the HA VPN gateways, the Cloud Routers, the four tunnels, the BGP peering and global dynamic routing | — |
 | [`gsp_alb_autoscaling.sh`](./gsp_alb_autoscaling.sh) | **Configure an Application Load Balancer with Autoscaling** | The health check rule, the Cloud NAT, the custom web server image, two instance groups and the IPv4/IPv6 load balancer | — |
@@ -2105,6 +2105,15 @@ script does the whole thing.
 | 2–3 | Prints `config current-context`, `cluster-info`, `get-contexts` and the redacted `config view` — read-only, no checkpoint |
 | 4 | `kubectl create deployment --image nginx nginx-1`, waits for the Pod, writes and `kubectl cp`s `test.html` into it, `kubectl expose pod … --port 80 --type LoadBalancer`, waits for the external IP and curls the page ⏸ |
 | 5 | Writes the lab's `new-nginx-pod.yaml` (no `training-data-analyst` clone), applies it, waits for `new-nginx` ⏸ — then prints the interactive exec / port-forward / logs steps |
+
+### All three checkpoints passed
+
+Verified on the run that finished the **Google Cloud Engineering Certificate**
+path. The certificate only issues once every lab in the path registers as
+complete, and a lab only completes when all of its checkpoints pass — so this
+script cleared *Deploy GKE clusters*, *Deploy Pods to GKE clusters* and *Deploy a
+new pod using a Yaml file* in one pass. The lab page still shows the exact points
+if you want the number in writing.
 
 ### Autopilot starts at zero nodes
 
