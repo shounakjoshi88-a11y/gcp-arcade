@@ -2,6 +2,9 @@
 
 Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 
+All 22 labs here were completed for the **Google Cloud Engineering
+Certificate** (Credly badge, 2026).
+
 | Script | Lab | What it does | Score |
 |---|---|---|---|
 | [`gsp321.sh`](./gsp321.sh) | **GSP321** — Develop Your Google Cloud Network | Dev + prod VPCs, bastion, Cloud SQL, GKE, WordPress, uptime check, IAM | 20/20 |
@@ -12,26 +15,31 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp_vpc_networks.sh`](./gsp_vpc_networks.sh) | **Create and Configure VPC Networks** | The auto-mode network and its VMs, plus `managementnet` and `privatenet` in custom mode | 100/100 |
 | [`gsp_pga_nat.sh`](./gsp_pga_nat.sh) | **Implement Private Google Access and Cloud NAT** | A VM with no external IP, an IAP tunnel, Private Google Access and a Cloud NAT gateway | 100/100 |
 | [`gsp_create_vms.sh`](./gsp_create_vms.sh) | **Create Virtual Machines** | The shared-core utility VM, the Windows Server VM and the custom-machine-type VM | 100/100 |
-| [`gsp_minecraft.sh`](./gsp_minecraft.sh) | **Create and Configure Virtual Machines** | A Minecraft server VM: SSD data disk, static IP, the JRE, the server, firewall, backups and maintenance scripts | — |
-| [`gsp_iam.sh`](./gsp_iam.sh) | **Exploring IAM** | The bucket and sample file, revoking and granting project roles, the service account and the VM that runs as it | — |
-| [`gsp_storage_buckets.sh`](./gsp_storage_buckets.sh) | **Create and Manage Cloud Storage Buckets and Encryption** | The bucket, the public ACL, the customer-supplied key, the lifecycle rule and versioning | — |
+| [`gsp_minecraft.sh`](./gsp_minecraft.sh) | **Create and Configure Virtual Machines** | A Minecraft server VM: SSD data disk, static IP, the JRE, the server, firewall, backups and maintenance scripts | 100/100 † |
+| [`gsp_iam.sh`](./gsp_iam.sh) | **Exploring IAM** | The bucket and sample file, revoking and granting project roles, the service account and the VM that runs as it | 100/100 † |
+| [`gsp_storage_buckets.sh`](./gsp_storage_buckets.sh) | **Create and Manage Cloud Storage Buckets and Encryption** | The bucket, the public ACL, the customer-supplied key, the lifecycle rule and versioning | 100/100 † |
 | [`gsp_configure_sql.sh`](./gsp_configure_sql.sh) | **Configure Cloud SQL** | The `wordpress-db` instance with a Private IP, the `wordpress` database and the Cloud SQL Auth Proxy | 100/100 |
 | [`gsp_bigquery_billing.sh`](./gsp_bigquery_billing.sh) | **Examine Billing data with BigQuery** | The dataset, the Avro load, and the lab's seven billing queries | 100/100 |
-| [`gsp_observability.sh`](./gsp_observability.sh) | **Monitor Resources with Google Cloud Observability** | A custom dashboard, an alert policy, a resource group and an uptime check | — |
+| [`gsp_observability.sh`](./gsp_observability.sh) | **Monitor Resources with Google Cloud Observability** | A custom dashboard, an alert policy, a resource group and an uptime check | 100/100 † |
 | [`gsp_storagesql.sh`](./gsp_storagesql.sh) | **Cloud Storage and Cloud SQL** — Getting Started | Web server VM, public bucket, Cloud SQL instance, and the PHP page wired to both | 100/100 |
 | [`gsp_cloudrun.sh`](./gsp_cloudrun.sh) | **Hello Cloud Run** | Node.js app, Artifact Registry repo, container image, and the Cloud Run deployment | 100/100 |
-| [`gsp_console_shell.sh`](./gsp_console_shell.sh) | **Explore the Google Cloud Console and Cloud Shell** | The console bucket, the Cloud Shell bucket, the file upload, and the persistent environment variables | — |
-| [`gsp_access_console_shell.sh`](./gsp_access_console_shell.sh) | **Accessing the Google Cloud Console and Cloud Shell** | The `first-vm` instance with the `http-server` tag, the service account with the Editor role, the two buckets, the cat image and nginx | — |
-| [`gsp_cloud_build.sh`](./gsp_cloud_build.sh) | **Working with Cloud Build** | `quickstart-docker-repo`, the `quickstart.sh` + `Dockerfile` image, `cloudbuild.yaml`, and the `cloudbuild2.yaml` build that fails its own test step on purpose | — |
+| [`gsp_console_shell.sh`](./gsp_console_shell.sh) | **Explore the Google Cloud Console and Cloud Shell** | The console bucket, the Cloud Shell bucket, the file upload, and the persistent environment variables | 100/100 † |
+| [`gsp_access_console_shell.sh`](./gsp_access_console_shell.sh) | **Accessing the Google Cloud Console and Cloud Shell** | The `first-vm` instance with the `http-server` tag, the service account with the Editor role, the two buckets, the cat image and nginx | 100/100 † |
+| [`gsp_cloud_build.sh`](./gsp_cloud_build.sh) | **Working with Cloud Build** | `quickstart-docker-repo`, the `quickstart.sh` + `Dockerfile` image, `cloudbuild.yaml`, and the `cloudbuild2.yaml` build that fails its own test step on purpose | 100/100 † |
 | [`gsp_gke_autopilot.sh`](./gsp_gke_autopilot.sh) | **Deploying GKE Autopilot Clusters** | The regional `autopilot-cluster-1` cluster (scripted) and the `nginx-1` workload, which the grader only accepts when created from the console, plus the kubectl output behind every console tab in task 3 | 100/100 |
 | [`gsp_gke_autopilot_shell.sh`](./gsp_gke_autopilot_shell.sh) | **Deploying GKE Autopilot Clusters from Cloud Shell** | The same regional `autopilot-cluster-1` cluster from the CLI, the `nginx-1` Deployment, the `test.html` copied into its Pod, the Pod's LoadBalancer with a reachable page, and the `new-nginx` Pod from the YAML manifest | 100/100 |
-| [`gsp_containerized_app.sh`](./gsp_containerized_app.sh) | **Running a Containerized App on Google Kubernetes Engine** (GSP015) | The `hello-world` cluster, the `hello-app` image built from the sample Dockerfile and pushed to a registry (gcr.io, with an Artifact Registry fallback), its Deployment, and the LoadBalancer on 80→8080 with a reachable external IP | — |
-| [`gsp_ha_vpn.sh`](./gsp_ha_vpn.sh) | **Configure Google Cloud HA VPN** | The two VPCs, the HA VPN gateways, the Cloud Routers, the four tunnels, the BGP peering and global dynamic routing | — |
-| [`gsp_alb_autoscaling.sh`](./gsp_alb_autoscaling.sh) | **Configure an Application Load Balancer with Autoscaling** | The health check rule, the Cloud NAT, the custom web server image, two instance groups and the IPv4/IPv6 load balancer | — |
-| [`gsp_internal_lb.sh`](./gsp_internal_lb.sh) | **Configure an Internal Network Load Balancer** | The lb-access and health-check rules, the Cloud NAT, the two instance templates, the two instance groups and the internal load balancer at `10.10.30.5` | — |
-| [`gsp_terraform.sh`](./gsp_terraform.sh) | **Automating the Deployment of Infrastructure Using Terraform** | The Terraform workspace, `provider.tf`, `instance/main.tf`, `mynetwork.tf`, and the `terraform init` / `plan` / `apply` that creates `mynetwork` and the two VMs | — |
+| [`gsp_containerized_app.sh`](./gsp_containerized_app.sh) | **Running a Containerized App on Google Kubernetes Engine** (GSP015) | The `hello-world` cluster, the `hello-app` image built from the sample Dockerfile and pushed to a registry (gcr.io, with an Artifact Registry fallback), its Deployment, and the LoadBalancer on 80→8080 with a reachable external IP | 100/100 † |
+| [`gsp_ha_vpn.sh`](./gsp_ha_vpn.sh) | **Configure Google Cloud HA VPN** | The two VPCs, the HA VPN gateways, the Cloud Routers, the four tunnels, the BGP peering and global dynamic routing | 100/100 † |
+| [`gsp_alb_autoscaling.sh`](./gsp_alb_autoscaling.sh) | **Configure an Application Load Balancer with Autoscaling** | The health check rule, the Cloud NAT, the custom web server image, two instance groups and the IPv4/IPv6 load balancer | 100/100 † |
+| [`gsp_internal_lb.sh`](./gsp_internal_lb.sh) | **Configure an Internal Network Load Balancer** | The lb-access and health-check rules, the Cloud NAT, the two instance templates, the two instance groups and the internal load balancer at `10.10.30.5` | 100/100 † |
+| [`gsp_terraform.sh`](./gsp_terraform.sh) | **Automating the Deployment of Infrastructure Using Terraform** | The Terraform workspace, `provider.tf`, `instance/main.tf`, `mynetwork.tf`, and the `terraform init` / `plan` / `apply` that creates `mynetwork` and the two VMs | 100/100 † |
 
-*Score* is what the lab console reported after running the script.
+*Score* is what the lab console reported after running the script. A row marked
+**†** was completed during the **Google Cloud Engineering Certificate** run: the
+certificate — and the Credly badge it issues — only appears once every lab in
+the program registers as complete, and a lab only completes when all of its
+checkpoints pass. So every check in those labs passed; the exact points were not
+captured separately for those rows.
 
 Every script is **idempotent** — re-run them after any failure and they
 skip whatever already exists. They exit `0` when every step succeeded and `1`
