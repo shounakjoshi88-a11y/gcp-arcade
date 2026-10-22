@@ -53,12 +53,24 @@ Console: **Kubernetes Engine → Workloads → Create deployment**
 | Container image | `nginx:latest` (the default) |
 | Configuration details | defaults (3 replicas) |
 
+The image must be the literal string **`nginx:latest`**. Plain `--image=nginx`
+records it as `nginx` and the checkpoint fails with *Please Deploy a sample
+nginx workload*.
+
 CLI equivalent:
 
 ```bash
-kubectl create deployment nginx-1 --image=nginx --replicas=3
+kubectl create deployment nginx-1 --image=nginx:latest --replicas=3
 kubectl rollout status deployment/nginx-1
 kubectl get pods -l app=nginx-1
+kubectl get deployment nginx-1 -o jsonpath='{.spec.template.spec.containers[0].image}'   # nginx:latest
+```
+
+If you already deployed it with a bare `nginx`, repair it in place:
+
+```bash
+kubectl set image deployment/nginx-1 nginx=nginx:latest
+kubectl rollout status deployment/nginx-1
 ```
 
 Click **Check my progress** — *Deploy a sample nginx workload*.

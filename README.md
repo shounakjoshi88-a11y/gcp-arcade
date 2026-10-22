@@ -1983,6 +1983,15 @@ which is a different lab with different checkpoints (*Deploy GKE clusters*,
 script is for the console lab: **Deploy GKE cluster** and **Deploy a sample
 nginx workload**.
 
+### The image string has to be literally `nginx:latest`
+
+The console default records the container image as `nginx:latest`. A bare
+`--image=nginx` records it as `nginx` instead, and the grader rejects that —
+task 2 comes back with *Please Deploy a sample nginx workload* even though the
+Deployment, its three Pods and the name are all correct. The script pins the
+tag, repairs an existing workload whose image drifted, and prints the image it
+ended up with so you can see it.
+
 ### Autopilot is regional
 
 There are no node pools, machine types or node counts to choose — Google

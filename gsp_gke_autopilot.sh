@@ -292,10 +292,29 @@ task2() {
     return 0
   fi
 
+  # The lab's console default is the literal image string "nginx:latest". A
+  # bare "--image=nginx" records the spec as "nginx", which the grader does not
+  # accept, so the tag is pinned explicitly here and repaired if it drifted.
   if kubectl get deployment nginx-1 >/dev/null 2>&1; then
     ok "the deployment nginx-1 already exists"
-    local want=3 have
+    local want=3 have cname img
     have="$(kubectl get deployment nginx-1 -o jsonpath='{.spec.replicas}' 2>/dev/null)"
+    cname="$(kubectl get deployment nginx-1 -o jsonpath='{.spec.template.spec.containers[0].name}' 2>/dev/null)"
+    img="$(kubectl get deployment nginx-1 -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)"
+    [ -z "$cname" ] && cname=nginx
+
+    if [ "$img" != "nginx:latest" ]; then
+      info "the workload runs '$img'; the lab's console default is nginx:latest - updating"
+      if kubectl set image "deployment/nginx-1" "${cname}=nginx:latest" > "$WORKDIR/setimage.log" 2>&1; then
+        ok "nginx-1 now runs nginx:latest"
+      else
+        err "$(tail -n 2 "$WORKDIR/setimage.log" 2>/dev/null | tr '\n' ' ')"
+        note_fail "could not pin the image to nginx:latest"
+      fi
+    else
+      ok "nginx-1 runs nginx:latest"
+    fi
+
     if [ "$have" != "$want" ]; then
       info "scaling nginx-1 from $have to $want replicas, as the console default does"
       kubectl scale deployment nginx-1 --replicas="$want" >/dev/null 2>&1 \
@@ -303,8 +322,8 @@ task2() {
         || note_fail "could not scale nginx-1"
     fi
   else
-    info "creating the deployment nginx-1 (nginx, 3 replicas)"
-    if kubectl create deployment nginx-1 --image=nginx --replicas=3 > "$WORKDIR/deploy.log" 2>&1; then
+    info "creating the deployment nginx-1 (nginx:latest, 3 replicas)"
+    if kubectl create deployment nginx-1 --image=nginx:latest --replicas=3 > "$WORKDIR/deploy.log" 2>&1; then
       ok "the deployment nginx-1 is created"
     else
       err "$(tail -n 2 "$WORKDIR/deploy.log" 2>/dev/null | tr '\n' ' ')"
@@ -324,6 +343,11 @@ task2() {
   echo ""
   kubectl get deployment nginx-1 2>/dev/null | sed 's/^/    /'
   kubectl get pods -l app=nginx-1 2>/dev/null | sed 's/^/    /'
+  local final_img
+  final_img="$(kubectl get deployment nginx-1 -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null)"
+  if [ -n "$final_img" ]; then
+    dim "  the workload's image is '$final_img' - the grader looks for nginx:latest"
+  fi
 
   pause_for_check 2 "Deploy a sample nginx workload"
 }
@@ -394,7 +418,7 @@ step "Summary"
 echo "  Project   : $PROJECT_ID"
 echo "  Region    : $REGION"
 echo "  Cluster   : $CLUSTER (Autopilot, regional)"
-echo "  Workload  : nginx-1 (nginx, 3 replicas)"
+echo "  Workload  : nginx-1 (nginx:latest, 3 replicas)"
 echo ""
 echo "  Checkpoints:"
 echo "    1. Deploy GKE cluster"
