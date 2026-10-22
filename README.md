@@ -21,6 +21,7 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp_storagesql.sh`](./gsp_storagesql.sh) | **Cloud Storage and Cloud SQL** — Getting Started | Web server VM, public bucket, Cloud SQL instance, and the PHP page wired to both | 100/100 |
 | [`gsp_cloudrun.sh`](./gsp_cloudrun.sh) | **Hello Cloud Run** | Node.js app, Artifact Registry repo, container image, and the Cloud Run deployment | 100/100 |
 | [`gsp_console_shell.sh`](./gsp_console_shell.sh) | **Explore the Google Cloud Console and Cloud Shell** | The console bucket, the Cloud Shell bucket, the file upload, and the persistent environment variables | — |
+| [`gsp_access_console_shell.sh`](./gsp_access_console_shell.sh) | **Accessing the Google Cloud Console and Cloud Shell** | The `first-vm` instance with the `http-server` tag, the service account with the Editor role, the two buckets, the cat image and nginx | — |
 | [`gsp_ha_vpn.sh`](./gsp_ha_vpn.sh) | **Configure Google Cloud HA VPN** | The two VPCs, the HA VPN gateways, the Cloud Routers, the four tunnels, the BGP peering and global dynamic routing | — |
 | [`gsp_alb_autoscaling.sh`](./gsp_alb_autoscaling.sh) | **Configure an Application Load Balancer with Autoscaling** | The health check rule, the Cloud NAT, the custom web server image, two instance groups and the IPv4/IPv6 load balancer | — |
 | [`gsp_internal_lb.sh`](./gsp_internal_lb.sh) | **Configure an Internal Network Load Balancer** | The lb-access and health-check rules, the Cloud NAT, the two instance templates, the two instance groups and the internal load balancer at `10.10.30.5` | — |
@@ -1869,6 +1870,47 @@ suggestion.
 
 ---
 
+## Accessing the Google Cloud Console and Cloud Shell
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_access_console_shell.sh
+chmod +x gsp_access_console_shell.sh
+./gsp_access_console_shell.sh
+```
+
+| Task | What the script does |
+|---|---|
+| 1 | The `default-allow-http` and `allow-ssh-all` rules, the `first-vm` instance tagged `http-server`, and the `test-service-account` with the Editor role ⏸ |
+| 2 | `gcloud auth list` and `gcloud config list project`, so the Cloud Shell panel in the lab matches |
+| 3 | `gs://<project>-bucket1` and `-bucket2`, the `cat.jpg` upload, and the public Object Viewer grant on bucket 1 ⏸ |
+| 4 | Clones `orchestrate-with-kubernetes`, adds the `Finished cleanup!` line, writes the cat `index.html`, copies it to `first-vm` and installs nginx ⏸ |
+
+### Not the same lab as `gsp_console_shell.sh`
+
+The repo has two similarly named labs:
+
+- **Explore the Google Cloud Console and Cloud Shell** — `gsp_console_shell.sh`, all
+  console-clicking, no compute.
+- **Accessing the Google Cloud Console and Cloud Shell** (this one, CBL138) — the
+  VM, the service account, the buckets and the nginx page.
+
+### The zone is lab-assigned
+
+The lab hands out a zone per run. The script reads `ZONE` from the environment and
+asks for it with the project default as the suggestion, so nothing is hardcoded.
+
+### Options
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--project ID` | active gcloud project | Target project |
+| `--zone ZONE` | `$ZONE` | The zone of `first-vm` |
+| `--task N` | all | Run only task N (1–4) |
+| `--yes` | off | Do not pause for the checkpoints |
+| `-h, --help` | | Usage |
+
+---
+
 ## Layout
 
 
@@ -1891,6 +1933,7 @@ gsp_observability.sh      # Monitor resources with Cloud Observability
 gsp_storagesql.sh     # Getting Started with Cloud Storage and Cloud SQL
 gsp_cloudrun.sh       # Hello Cloud Run
 gsp_console_shell.sh  # Explore the Google Cloud Console and Cloud Shell
+gsp_access_console_shell.sh # Accessing the Google Cloud Console and Cloud Shell
 gsp_ha_vpn.sh          # Configure Google Cloud HA VPN
 gsp_alb_autoscaling.sh # Configure an Application Load Balancer with Autoscaling
 gsp_internal_lb.sh     # Configure an Internal Network Load Balancer
@@ -1914,6 +1957,8 @@ TASKS_console_shell.md # Explore the Google Cloud Console and Cloud Shell, by ha
 TASKS_ha_vpn.md       # Configure Google Cloud HA VPN, by hand
 TASKS_alb_autoscaling.md # Configure an Application Load Balancer with Autoscaling, by hand
 TASKS_internal_lb.md     # Configure an Internal Network Load Balancer, by hand
+TASKS_terraform.md       # Automating the Deployment of Infrastructure with Terraform, by hand
+TASKS_access_console_shell.md # Accessing the Google Cloud Console and Cloud Shell, by hand
 README.md             # this file
 LICENSE               # MIT
 ```
