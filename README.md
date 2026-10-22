@@ -24,6 +24,7 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp_access_console_shell.sh`](./gsp_access_console_shell.sh) | **Accessing the Google Cloud Console and Cloud Shell** | The `first-vm` instance with the `http-server` tag, the service account with the Editor role, the two buckets, the cat image and nginx | — |
 | [`gsp_cloud_build.sh`](./gsp_cloud_build.sh) | **Working with Cloud Build** | `quickstart-docker-repo`, the `quickstart.sh` + `Dockerfile` image, `cloudbuild.yaml`, and the `cloudbuild2.yaml` build that fails its own test step on purpose | — |
 | [`gsp_gke_autopilot.sh`](./gsp_gke_autopilot.sh) | **Deploying GKE Autopilot Clusters** | The regional `autopilot-cluster-1` cluster (scripted) and the `nginx-1` workload, which the grader only accepts when created from the console, plus the kubectl output behind every console tab in task 3 | 100/100 |
+| [`gsp_containerized_app.sh`](./gsp_containerized_app.sh) | **Running a Containerized App on Google Kubernetes Engine** (GSP015) | The `hello-world` cluster, the `hello-app` image built from the sample Dockerfile and pushed to a registry (gcr.io, with an Artifact Registry fallback), its Deployment, and the LoadBalancer on 80→8080 with a reachable external IP | — |
 | [`gsp_ha_vpn.sh`](./gsp_ha_vpn.sh) | **Configure Google Cloud HA VPN** | The two VPCs, the HA VPN gateways, the Cloud Routers, the four tunnels, the BGP peering and global dynamic routing | — |
 | [`gsp_alb_autoscaling.sh`](./gsp_alb_autoscaling.sh) | **Configure an Application Load Balancer with Autoscaling** | The health check rule, the Cloud NAT, the custom web server image, two instance groups and the IPv4/IPv6 load balancer | — |
 | [`gsp_internal_lb.sh`](./gsp_internal_lb.sh) | **Configure an Internal Network Load Balancer** | The lb-access and health-check rules, the Cloud NAT, the two instance templates, the two instance groups and the internal load balancer at `10.10.30.5` | — |
@@ -2021,6 +2022,55 @@ suggestion.
 
 ---
 
+## Running a Containerized App on Google Kubernetes Engine
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_containerized_app.sh
+chmod +x gsp_containerized_app.sh
+./gsp_containerized_app.sh
+```
+
+GSP015. Unlike the Autopilot console lab, this one is Cloud Shell end to end, so
+all three checkpoints are scriptable.
+
+| Task | What the script does |
+|---|---|
+| 1 | Sets the zone, creates the `hello-world` cluster with three nodes, pulls the kubeconfig ⏸ |
+| 2–3 | Shallow-clones `kubernetes-engine-samples`, builds `hello-app:1.0` from `quickstarts/hello-app/Dockerfile`, configures the registry credentials and pushes it |
+| 4 | `kubectl create deployment hello-app`, waits for the Pod, then `kubectl expose … --type=LoadBalancer --port=80 --target-port=8080` ⏸⏸ |
+| 5 | Prints the three knowledge-check answers |
+
+### The zone is fixed by the lab
+
+`gcloud config set compute/zone us-east4-a` is in the lab text, so that is the
+default. `--zone` or `$ZONE` still wins.
+
+### gcr.io is being retired, so there is a fallback
+
+The lab pushes to Container Registry (`gcr.io`). Google has been winding that
+service down, and a push can come back as `denied`. When that happens the script
+creates an Artifact Registry repository `hello-repo` in the cluster's region,
+re-tags the image as `<region>-docker.pkg.dev/<project>/hello-repo/hello-app:1.0`,
+pushes there, and deploys that image instead. The Deployment keeps the name the
+checkpoint looks for.
+
+### Slow steps are streamed
+
+`gcloud container clusters create` (3–6 min) and `docker build` (2–4 min) both
+run with a heartbeat every 20 s, and the cluster wait is bounded by `--timeout`.
+
+### Options
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--project ID` | active gcloud project | Target project |
+| `--zone ZONE` | `$ZONE`, else `us-east4-a` | The cluster's zone |
+| `--task N` | all | Run only task N (1–5) |
+| `--yes` | off | Do not pause at the checkpoints |
+| `--timeout MIN` | 30 | Cluster/build wait budget |
+
+---
+
 ## Layout
 
 
@@ -2046,6 +2096,7 @@ gsp_console_shell.sh  # Explore the Google Cloud Console and Cloud Shell
 gsp_access_console_shell.sh # Accessing the Google Cloud Console and Cloud Shell
 gsp_cloud_build.sh     # Working with Cloud Build
 gsp_gke_autopilot.sh   # Deploying GKE Autopilot Clusters
+gsp_containerized_app.sh # Running a Containerized App on GKE (GSP015)
 gsp_ha_vpn.sh          # Configure Google Cloud HA VPN
 gsp_alb_autoscaling.sh # Configure an Application Load Balancer with Autoscaling
 gsp_internal_lb.sh     # Configure an Internal Network Load Balancer
@@ -2073,6 +2124,7 @@ TASKS_terraform.md       # Automating the Deployment of Infrastructure with Terr
 TASKS_access_console_shell.md # Accessing the Google Cloud Console and Cloud Shell, by hand
 TASKS_cloud_build.md     # Working with Cloud Build, by hand
 TASKS_gke_autopilot.md   # Deploying GKE Autopilot Clusters, by hand
+TASKS_containerized_app.md # Running a Containerized App on GKE, by hand
 README.md             # this file
 LICENSE               # MIT
 ```
