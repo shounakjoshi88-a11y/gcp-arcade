@@ -41,14 +41,20 @@
 #     6. Stress test an Application Load Balancer (HTTP)     (end of task 6)
 #
 #  NOTES:
-#   * The lab injects the regions and the zones per run. The script reads
-#     them from the shell the lab starts and asks for whatever is missing.
+#   * The lab fixes the first region, the first zone and the second region:
+#     the Cloud NAT, the web server VM and the us-1-mig group live in
+#     us-east4 (zone us-east4-c), the notus-1-mig group in asia-south1. Only
+#     the stress test VM is left to the student - it goes in a region that is
+#     different but closer to us-east4 than to asia-south1, so the load
+#     balancer has to pick the closer backend.
 #   * The instance template must NOT pin a subnet. A template is a global
 #     resource and both instance groups use it - one in each region - so the
 #     VM has to pick up the default subnet of its own region.
 #   * The web server VM has no external IP on purpose, so Apache is
 #     installed by a startup script that goes out through the Cloud NAT of
 #     task 2. That is the only way the VM can reach the package mirrors.
+#   * The health check is HTTP, not TCP. A global HTTP health check is also
+#     what the autohealing of a regional instance group accepts.
 #   * Creating an image, an instance group or a load balancer blocks for
 #     minutes, and a silent wait looks exactly like a hang, so those calls
 #     stream with a heartbeat.
@@ -319,7 +325,7 @@ FW_RULE="fw-allow-health-checks"
 HEALTH_TAG="allow-health-checks"
 HC_RANGES="130.211.0.0/22,35.191.0.0/16"
 
-NAT_ROUTER="nat-router"
+NAT_ROUTER="nat-router-us1"
 NAT_GW="nat-config"
 
 WEBSERVER="webserver"
@@ -348,9 +354,14 @@ GCP_ZONE="$(gcloud config get-value compute/zone 2>/dev/null)"
 GCP_REGION="$(gcloud config get-value compute/region 2>/dev/null)"
 [ "$GCP_REGION" = "(unset)" ] && GCP_REGION=""
 
-REGION1="${REGION1_OVERRIDE:-${REGION_1:-${REGION:-${GCP_REGION:-us-central1}}}}"
-REGION2="${REGION2_OVERRIDE:-${REGION_2:-${REGION_NOTUS:-europe-west4}}}"
-ZONE1="${ZONE1_OVERRIDE:-${ZONE:-${ZONE_1:-}}}"
+# The lab fixes the first region, the first zone and the second region:
+# the Cloud NAT, the web server VM and the us-1-mig group live in us-east4
+# (zone us-east4-c), the notus-1-mig group in asia-south1. Only the stress
+# test VM is left to the student - it has to go in a region that is
+# different but closer to us-east4 than to asia-south1.
+REGION1="${REGION1_OVERRIDE:-${REGION_1:-${REGION:-us-east4}}}"
+REGION2="${REGION2_OVERRIDE:-${REGION_2:-${REGION_NOTUS:-asia-south1}}}"
+ZONE1="${ZONE1_OVERRIDE:-${ZONE:-${ZONE_1:-us-east4-c}}}"
 STRESS_REGION="${STRESS_REGION_OVERRIDE:-${STRESS_REGION_ENV:-us-east1}}"
 STRESS_ZONE="${STRESS_ZONE_OVERRIDE:-${STRESS_ZONE_ENV:-}}"
 
@@ -361,6 +372,7 @@ fi
 echo ""
 warn "the lab assigns the regions and the zones per lab run"
 dim "  they are on the lab setup panel - copy them from there"
+dim "  the lab uses $REGION1 (zone $ZONE1) and $REGION2"
 echo ""
 
 acquire_region "Region 1 - the NAT and the $MIG1 group" "$REGION1" "$REGION2"
@@ -592,7 +604,7 @@ apt-get update -y
 apt-get install -y apache2
 systemctl enable apache2
 systemctl start apache2
-echo "RKSHA-STARTUP-SCRIPT-DONE"'
+echo "RKSHA-STARTUP-SCRIPT-DONE apache=$(systemctl is-active apache2) enabled=$(systemctl is-enabled apache2)"'
 
 task3() {
   step "Task 3 - Create a custom image for a web server"
@@ -625,13 +637,14 @@ task3() {
   fi
 
   info "waiting for the startup script to install Apache (it goes out through the NAT)"
-  local i done=""
+  local i done="" state=""
   for i in $(seq 1 60); do
-    done="$(gcloud compute instances get-serial-port-output "$WEBSERVER" \
+    state="$(gcloud compute instances get-serial-port-output "$WEBSERVER" \
               --zone="$ZONE1" --project "$PROJECT_ID" 2>/dev/null \
-              | grep -c "RKSHA-STARTUP-SCRIPT-DONE" 2>/dev/null)"
-    if [ "${done:-0}" -ge 1 ] 2>/dev/null; then
-      ok "Apache is installed and started"
+              | grep "RKSHA-STARTUP-SCRIPT-DONE" | tail -1)"
+    if [ -n "$state" ]; then
+      done=1
+      ok "the startup script finished: ${state#*RKSHA-STARTUP-SCRIPT-DONE }"
       break
     fi
     if [ $((i % 3)) -eq 0 ]; then
@@ -688,6 +701,11 @@ ensure_mig() {  # $1 = name, $2 = region
          --health-check="$HEALTH_CHECK" --initial-delay=60 \
          --project "$PROJECT_ID" --quiet; then
       ok "created the instance group $n"
+    elif run_live "$WORKDIR/mig-$n.log" gcloud compute instance-groups managed create "$n" \
+         --template="$TEMPLATE" --region="$region" --size=1 \
+         --base-instance-name="$n" \
+         --project "$PROJECT_ID" --quiet; then
+      ok "created the instance group $n (without the health check on the group)"
     else
       note_fail "could not create the instance group $n"
       dim "  the log is in $WORKDIR/mig-$n.log"
@@ -746,8 +764,10 @@ task4() {
   step "Task 4 - Configure an instance template and create instance groups"
 
   if ! hcheck_exists "$HEALTH_CHECK"; then
-    info "creating the health check $HEALTH_CHECK"
-    if gcloud compute health-checks create tcp "$HEALTH_CHECK" \
+    info "creating the health check $HEALTH_CHECK (HTTP, port 80)"
+    # The lab uses HTTP, not TCP. A global HTTP health check is also what
+    # the autohealing of a regional instance group accepts.
+    if gcloud compute health-checks create http "$HEALTH_CHECK" \
          --port=80 --global --project "$PROJECT_ID" --quiet >/dev/null 2>&1; then
       ok "created the health check $HEALTH_CHECK"
     else

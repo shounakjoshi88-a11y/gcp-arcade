@@ -1697,11 +1697,26 @@ chmod +x gsp_alb_autoscaling.sh
 | Task | What the script does |
 |---|---|
 | 1 | `fw-allow-health-checks` — tcp:80 from `130.211.0.0/22` and `35.191.0.0/16` to the instances tagged `allow-health-checks` ⏸ |
-| 2 | the Cloud Router `nat-router` and the Cloud NAT `nat-config` in REGION 1, and waits for it to be `RUNNING` ⏸ |
+| 2 | the Cloud Router `nat-router-us1` and the Cloud NAT `nat-config` in `us-east4`, and waits for it to be `RUNNING` ⏸ |
 | 3 | the `webserver` VM with no external IP, Apache installed by a startup script, the image `mywebserver` from its boot disk, and the VM deleted ⏸ |
-| 4 | the health check `http-health-check`, the template `mywebserver-template`, and the two groups `us-1-mig` and `notus-1-mig` with autoscaling and autohealing ⏸ |
+| 4 | the health check `http-health-check` (HTTP), the template `mywebserver-template`, and the two groups `us-1-mig` and `notus-1-mig` with autoscaling and autohealing ⏸ |
 | 5 | the backend service `http-backend` with both backends, the URL map, the proxy, and the IPv4 and IPv6 forwarding rules ⏸ |
 | 6 | the `stress-test` VM, ApacheBench against the load balancer, and a wait for the autoscaler to add an instance ⏸ |
+
+The lab fixes the first region, the first zone and the second region:
+`us-east4` (zone `us-east4-c`) for the Cloud NAT, the `webserver` VM and
+`us-1-mig`, and `asia-south1` for `notus-1-mig`. Only the stress test VM is
+left to the student — it has to go in a **US** region other than `us-east4`,
+so the load balancer has to pick the closer backend.
+
+### The health check is HTTP, not TCP
+
+```bash
+gcloud compute health-checks create http http-health-check --port=80 --global
+```
+
+The lab asks for HTTP on port 80, and a global HTTP health check is also
+what the autohealing of a regional instance group accepts.
 
 ### The template must not pin a subnet
 
@@ -1767,9 +1782,9 @@ gcloud compute ssh stress-test --zone=STRESS_ZONE --command="cat /tmp/ab.log"
 | Flag | Default | What it does |
 |---|---|---|
 | `--project ID` | active gcloud project | Target project |
-| `--region1 REGION` | `$REGION_1` / `$REGION` | The NAT and `us-1-mig` |
-| `--region2 REGION` | `$REGION_2` | `notus-1-mig` |
-| `--zone1 ZONE` | `$ZONE` / `$ZONE_1` | The `webserver` VM |
+| `--region1 REGION` | `us-east4` | The NAT and `us-1-mig` |
+| `--region2 REGION` | `asia-south1` | `notus-1-mig` |
+| `--zone1 ZONE` | `us-east4-c` | The `webserver` VM |
 | `--stress-region R` | `us-east1` | The region of the stress test VM |
 | `--stress-zone Z` | `$STRESS_ZONE` | The zone of the stress test VM |
 | `--task N` | all | Run only task N (1–6) |

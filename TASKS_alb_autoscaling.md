@@ -8,14 +8,20 @@ export PROJECT_ID=$(gcloud config get-value project)
 ```
 
 **The two regions and the zones are lab-assigned per run** — they are on the
-lab setup panel. In the commands below:
+lab setup panel. The lab fixes the first region, the first zone and the
+second region:
 
 | Name | What it is | Where it goes |
 |---|---|---|
-| `REGION 1` | a `us-*` region | the Cloud NAT, the `webserver` VM, the `us-1-mig` group |
-| `REGION 2` | a different region | the `notus-1-mig` group |
-| `ZONE 1` | zone in REGION 1 | the `webserver` VM |
-| `STRESS ZONE` | zone in a third region | the `stress-test` VM |
+| `REGION 1` | `us-east4` | the Cloud NAT, the `webserver` VM, the `us-1-mig` group |
+| `ZONE 1` | `us-east4-c` | the `webserver` VM |
+| `REGION 2` | `asia-south1` | the `notus-1-mig` group |
+| `STRESS ZONE` | a zone in a **US** region other than `us-east4` | the `stress-test` VM |
+
+> The stress test VM has to go in a region that is **different but closer
+> to `us-east4`** than to `asia-south1`. That is the whole point of task 6:
+> the load balancer forwards the traffic to the closer backend, so `us-1-mig`
+> gets it first and `notus-1-mig` only joins in once the load is high.
 
 ---
 
@@ -47,12 +53,12 @@ The web server VM of task 3 has **no external IP**, so it needs a Cloud NAT
 to reach the package mirrors.
 
 ```bash
-gcloud compute routers create nat-router \
+gcloud compute routers create nat-router-us1 \
     --network=default \
     --region="REGION 1"
 
 gcloud compute routers nats create nat-config \
-    --router=nat-router \
+    --router=nat-router-us1 \
     --region="REGION 1" \
     --nat-all-subnet-ip-ranges \
     --auto-allocate-nat-external-ips
@@ -62,7 +68,7 @@ Wait for the NAT to be `RUNNING`:
 
 ```bash
 gcloud compute routers nats describe nat-config \
-    --router=nat-router --region="REGION 1" --format="value(status)"
+    --router=nat-router-us1 --region="REGION 1" --format="value(status)"
 ```
 
 Click **Check my progress** — *Create a NAT configuration using Cloud Router*.
@@ -129,10 +135,14 @@ Click **Check my progress** — *Create a custom image for a web server*.
 ### The health check
 
 ```bash
-gcloud compute health-checks create tcp http-health-check \
+gcloud compute health-checks create http http-health-check \
     --port=80 \
     --global
 ```
+
+> **HTTP, not TCP.** The lab's health check is HTTP on port 80. A global
+> HTTP health check is also what the autohealing of a regional instance
+> group accepts.
 
 ### The instance template
 
@@ -297,8 +307,39 @@ with IPv4 and IPv6*.
 
 ## Task 6 — Stress test an Application Load Balancer (HTTP)
 
-Create a VM in a third region — it needs a public address to reach the
-public load balancer:
+### Knowledge check
+
+> **The Application Load Balancer (HTTP) should forward traffic to the
+> region that is closest to you.**
+>
+> **Answer: True.**
+
+The load balancer sends the traffic to the closest backend that has spare
+capacity. The stress test VM sits in a US region, so it is much closer to
+`us-east4` than to `asia-south1` — `us-1-mig` gets the traffic first, and
+`notus-1-mig` only joins in once the load is high enough that the first
+backend cannot keep up.
+
+### Access the Application Load Balancer (HTTP)
+
+Wait for the load balancer to answer:
+
+```bash
+LB_IP=[LB_IP_v4]
+while [ -z "$RESULT" ] ;
+do
+  echo "Waiting for Load Balancer";
+  sleep 5;
+  RESULT=$(curl -m1 -s $LB_IP | grep Apache);
+done
+```
+
+Then open `http://[LB_IP_v4]` in a browser.
+
+### Stress test the Application Load Balancer (HTTP)
+
+Create a VM in a US region other than `us-east4` — it needs a public address
+to reach the public load balancer:
 
 ```bash
 gcloud compute instances create stress-test \
@@ -350,7 +391,7 @@ gcloud compute instance-templates delete mywebserver-template --quiet
 gcloud compute health-checks delete http-health-check --quiet
 gcloud compute images delete mywebserver --quiet
 gcloud compute disks delete webserver --zone="ZONE 1" --quiet
-gcloud compute routers nats delete nat-config --router=nat-router --region="REGION 1" --quiet
-gcloud compute routers delete nat-router --region="REGION 1" --quiet
+gcloud compute routers nats delete nat-config --router=nat-router-us1 --region="REGION 1" --quiet
+gcloud compute routers delete nat-router-us1 --region="REGION 1" --quiet
 gcloud compute firewall-rules delete fw-allow-health-checks --quiet
 ```
