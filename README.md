@@ -24,6 +24,7 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp_access_console_shell.sh`](./gsp_access_console_shell.sh) | **Accessing the Google Cloud Console and Cloud Shell** | The `first-vm` instance with the `http-server` tag, the service account with the Editor role, the two buckets, the cat image and nginx | — |
 | [`gsp_cloud_build.sh`](./gsp_cloud_build.sh) | **Working with Cloud Build** | `quickstart-docker-repo`, the `quickstart.sh` + `Dockerfile` image, `cloudbuild.yaml`, and the `cloudbuild2.yaml` build that fails its own test step on purpose | — |
 | [`gsp_gke_autopilot.sh`](./gsp_gke_autopilot.sh) | **Deploying GKE Autopilot Clusters** | The regional `autopilot-cluster-1` cluster (scripted) and the `nginx-1` workload, which the grader only accepts when created from the console, plus the kubectl output behind every console tab in task 3 | 100/100 |
+| [`gsp_gke_autopilot_shell.sh`](./gsp_gke_autopilot_shell.sh) | **Deploying GKE Autopilot Clusters from Cloud Shell** | The same regional `autopilot-cluster-1` cluster from the CLI, the `nginx-1` Deployment, the `test.html` copied into its Pod, the Pod's LoadBalancer with a reachable page, and the `new-nginx` Pod from the YAML manifest | - |
 | [`gsp_containerized_app.sh`](./gsp_containerized_app.sh) | **Running a Containerized App on Google Kubernetes Engine** (GSP015) | The `hello-world` cluster, the `hello-app` image built from the sample Dockerfile and pushed to a registry (gcr.io, with an Artifact Registry fallback), its Deployment, and the LoadBalancer on 80→8080 with a reachable external IP | — |
 | [`gsp_ha_vpn.sh`](./gsp_ha_vpn.sh) | **Configure Google Cloud HA VPN** | The two VPCs, the HA VPN gateways, the Cloud Routers, the four tunnels, the BGP peering and global dynamic routing | — |
 | [`gsp_alb_autoscaling.sh`](./gsp_alb_autoscaling.sh) | **Configure an Application Load Balancer with Autoscaling** | The health check rule, the Cloud NAT, the custom web server image, two instance groups and the IPv4/IPv6 load balancer | — |
@@ -1995,7 +1996,9 @@ The repo also covers *Deploying GKE Autopilot Clusters **from Cloud Shell***,
 which is a different lab with different checkpoints (*Deploy GKE clusters*,
 *Deploy Pods to GKE clusters*, *Deploy a new pod using a Yaml file*). This
 script is for the console lab: **Deploy GKE Autopilot cluster** and **Deploy a
-sample nginx workload**.
+sample nginx workload**. For the Cloud Shell one use
+[`gsp_gke_autopilot_shell.sh`](./gsp_gke_autopilot_shell.sh) — every checkpoint
+in that lab is resource-based, so that script does all of it.
 
 ### Autopilot is regional
 
@@ -2084,6 +2087,80 @@ run with a heartbeat every 20 s, and the cluster wait is bounded by `--timeout`.
 
 ---
 
+## Deploying GKE Autopilot Clusters from Cloud Shell
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_gke_autopilot_shell.sh
+chmod +x gsp_gke_autopilot_shell.sh
+./gsp_gke_autopilot_shell.sh
+```
+
+The Cloud Shell twin of the lab above. Same cluster name, different checkpoints,
+and — unlike the console variant — **all three are resource-based**, so the
+script does the whole thing.
+
+| Task | What the script does |
+|---|---|
+| 1 | Enables the Kubernetes Engine API, creates the regional `autopilot-cluster-1`, streams the wait, pulls the kubeconfig ⏸ |
+| 2–3 | Prints `config current-context`, `cluster-info`, `get-contexts` and the redacted `config view` — read-only, no checkpoint |
+| 4 | `kubectl create deployment --image nginx nginx-1`, waits for the Pod, writes and `kubectl cp`s `test.html` into it, `kubectl expose pod … --port 80 --type LoadBalancer`, waits for the external IP and curls the page ⏸ |
+| 5 | Writes the lab's `new-nginx-pod.yaml` (no `training-data-analyst` clone), applies it, waits for `new-nginx` ⏸ — then prints the interactive exec / port-forward / logs steps |
+
+### Autopilot starts at zero nodes
+
+There are no node pools to size: the first Pod can sit `Pending` for two or
+three minutes while Google adds a node, and `kubectl top nodes` errors until
+metrics arrive. The script waits for the rollout instead of failing on it, and
+if the Pod still is not there it says so and tells you to re-run just that task:
+
+```bash
+./gsp_gke_autopilot_shell.sh --task 4
+```
+
+### The Service is named after the Pod
+
+The lab exposes the Pod, not the Deployment
+(`kubectl expose pod $my_nginx_pod --port 80 --type LoadBalancer`), so the
+Service carries the Pod's generated name — `nginx-1-6b7bff9fc7-t7fzk` and the
+like. The script keeps that command, and on a re-run it reuses whatever
+`LoadBalancer` Service already exists instead of creating a second one.
+
+### The region is assigned per run
+
+Same story as GSP015: the lab text says `us-west1`, but the project carries
+`constraints/gcp.resourceLocations`, which rejects other regions with
+`code=400 … violates constraint`. Resolution order:
+
+1. `--region`
+2. `$my_region` (the variable the lab's own text exports)
+3. `$REGION`
+4. the project metadata (`google-compute-default-region`)
+5. the region the org policy allows
+6. `us-west1`, with a warning
+
+If `create-auto` still comes back with `violates constraint`, task 1 retries
+once in the policy's region.
+
+### The tail of the lab stays manual
+
+After the last checkpoint the lab has you open a bash shell inside `new-nginx`,
+`apt-get install nano`, edit `/usr/share/nginx/html/test.html`, then
+`port-forward` and follow the logs in two more Cloud Shell tabs. None of that is
+graded, and it needs a terminal and an editor, so the script prints the exact
+commands and stops.
+
+### Options
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--project ID` | active gcloud project | Target project |
+| `--region REGION` | `$my_region`, `$REGION`, metadata, else the org policy's region | The cluster's region |
+| `--task N` | all | Run only task N (1–5) |
+| `--yes` | off | Do not pause at the checkpoints |
+| `--timeout MIN` | 30 | Cluster / rollout / Pod wait budget |
+
+---
+
 ## Layout
 
 
@@ -2109,6 +2186,7 @@ gsp_console_shell.sh  # Explore the Google Cloud Console and Cloud Shell
 gsp_access_console_shell.sh # Accessing the Google Cloud Console and Cloud Shell
 gsp_cloud_build.sh     # Working with Cloud Build
 gsp_gke_autopilot.sh   # Deploying GKE Autopilot Clusters
+gsp_gke_autopilot_shell.sh # Deploying GKE Autopilot Clusters from Cloud Shell
 gsp_containerized_app.sh # Running a Containerized App on GKE (GSP015)
 gsp_ha_vpn.sh          # Configure Google Cloud HA VPN
 gsp_alb_autoscaling.sh # Configure an Application Load Balancer with Autoscaling
@@ -2137,6 +2215,7 @@ TASKS_terraform.md       # Automating the Deployment of Infrastructure with Terr
 TASKS_access_console_shell.md # Accessing the Google Cloud Console and Cloud Shell, by hand
 TASKS_cloud_build.md     # Working with Cloud Build, by hand
 TASKS_gke_autopilot.md   # Deploying GKE Autopilot Clusters, by hand
+TASKS_gke_autopilot_shell.md # Deploying GKE Autopilot Clusters from Cloud Shell, by hand
 TASKS_containerized_app.md # Running a Containerized App on GKE, by hand
 README.md             # this file
 LICENSE               # MIT
