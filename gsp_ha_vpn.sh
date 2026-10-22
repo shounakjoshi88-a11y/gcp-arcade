@@ -198,44 +198,75 @@ zone_usable() {  # $1 = zone
   gcloud compute zones describe "$1" --project "$PROJECT_ID" >/dev/null 2>&1
 }
 
-# The zones of a region, minus the ones this project cannot use.
+# The zones of a region. The API list is the source of truth, but a project
+# that is restricted to a few zones can refuse the list as well, so the
+# usual letters are the fallback.
 region_zones() {  # $1 = region
-  gcloud compute zones list --format="value(name)" 2>/dev/null \
-    | grep "^${1}-" | head -12
+  local out
+  out="$(gcloud compute zones list --format="value(name)" 2>/dev/null | grep "^${1}-")"
+  if [ -z "$out" ]; then
+    out="${1}-a ${1}-b ${1}-c ${1}-f"
+  fi
+  printf '%s' "$out"
 }
 
-# Ask for a zone until it is one this project can use, in the right region
-# and not the one to avoid. A value that is already good is taken as it is.
+# The zones of a region that this project can use, minus $2.
+usable_zones_in() {  # $1 = region, $2 = zone to avoid
+  local region="$1" avoid="$2" z found=""
+  for z in $(region_zones "$region"); do
+    [ "$z" = "$avoid" ] && continue
+    if zone_usable "$z"; then
+      found="$found $z"
+    fi
+  done
+  printf '%s' "${found# }"
+}
+
+# The zones of a region, minus $2 - whether this project can use them or not.
+all_zones_in() {  # $1 = region, $2 = zone to avoid
+  local region="$1" avoid="$2" z found=""
+  for z in $(region_zones "$region"); do
+    [ "$z" = "$avoid" ] && continue
+    found="$found $z"
+  done
+  printf '%s' "${found# }"
+}
+
+# Ask for a zone. A value that is already good is taken as it is. The
+# candidates of the region are listed, so the answer is never a guess.
 # Sets REPLY.
 acquire_zone() {  # $1 = label, $2 = current value, $3 = region ("" = any), $4 = zone to avoid
   local label="$1" current="$2" want_region="$3" avoid="$4"
-  local ans note="" zr tries=0 default="$2"
+  local ans note="" zr tries=0 default="$2" cands=""
+
+  if [ -n "$want_region" ]; then
+    cands="$(usable_zones_in "$want_region" "$avoid")"
+    if [ -z "$cands" ]; then
+      cands="$(all_zones_in "$want_region" "$avoid")"
+    fi
+    default="${cands%% *}"
+    [ -z "$default" ] && default="$current"
+  fi
 
   if [ -n "$current" ]; then
-    if zone_usable "$current"; then
-      if [ -z "$want_region" ] || [ "${current%-*}" = "$want_region" ]; then
-        if [ -z "$avoid" ] || [ "$current" != "$avoid" ]; then
-          REPLY="$current"
-          return 0
-        fi
-        warn "the lab wants a zone different from $avoid for this VM"
-        default="$(default_zone_in_region "$want_region" "$avoid")"
-        [ -z "$default" ] && default="$current"
-      else
-        warn "the zone $current is in ${current%-*}, but the lab puts this VM in $want_region"
-        default="$(default_zone_in_region "$want_region" "$avoid")"
-        [ -z "$default" ] && default="$current"
-      fi
-    else
+    if ! zone_usable "$current"; then
       warn "this project cannot use the zone $current"
-      default="$(default_zone_in_region "$want_region" "$avoid")"
-      [ -z "$default" ] && default="$current"
+    elif [ -n "$want_region" ] && [ "${current%-*}" != "$want_region" ]; then
+      warn "the zone $current is in ${current%-*}, but the lab puts this VM in $want_region"
+    elif [ -n "$avoid" ] && [ "$current" = "$avoid" ]; then
+      warn "the lab wants a zone different from $avoid for this VM"
+    else
+      REPLY="$current"
+      return 0
     fi
   fi
 
   while :; do
     if [ -n "$note" ]; then
       warn "$note"
+    fi
+    if [ -n "$cands" ]; then
+      dim "  the zones of $want_region: $cands"
     fi
     printf "  %s%s%s [%s]: " "$C_BOLD" "$label" "$C_RESET" "$default"
     if ! read -r ans; then
@@ -249,35 +280,20 @@ acquire_zone() {  # $1 = label, $2 = current value, $3 = region ("" = any), $4 =
       exit 2
     fi
     if ! zone_usable "$ans"; then
-      note="this project cannot use the zone $ans - give another one"
-      continue
+      # The create call is the real test - a zone that cannot be described
+      # may still work. Warn, but do not trap the user in a loop.
+      warn "this project cannot use the zone $ans - trying it anyway"
     fi
     zr="${ans%-*}"
     if [ -n "$want_region" ] && [ "$zr" != "$want_region" ]; then
-      note="the zone $ans is in $zr, but the lab puts this VM in $want_region - give another one"
-      continue
+      warn "the zone $ans is in $zr, but the lab puts this VM in $want_region"
     fi
     if [ -n "$avoid" ] && [ "$ans" = "$avoid" ]; then
-      note="the lab wants a zone different from $avoid for this VM - give another one"
-      continue
+      warn "the lab wants a zone different from $avoid for this VM"
     fi
     REPLY="$ans"
     return 0
   done
-}
-
-# The first zone of a region that this project can use, skipping $2.
-default_zone_in_region() {  # $1 = region, $2 = zone to avoid
-  [ -z "$1" ] && return 1
-  local z
-  for z in $(region_zones "$1"); do
-    [ "$z" = "$2" ] && continue
-    if zone_usable "$z"; then
-      printf '%s' "$z"
-      return 0
-    fi
-  done
-  return 1
 }
 
 GCP_ZONE="$(gcloud config get-value compute/zone 2>/dev/null)"
@@ -505,6 +521,17 @@ ensure_subnet() {  # $1 = name, $2 = network, $3 = range, $4 = region
     ok "the subnet $n already exists in $region"
     return 0
   fi
+  # The same name in another region means the regions do not match what the
+  # lab gave. The script would create a second subnet with that name and
+  # the grader would not know which one to look at.
+  local other
+  other="$(gcloud compute networks subnets list --network="$net" --filter="name=$n" \
+            --format="value(region)" 2>/dev/null | sed 's#.*/regions/##' | head -1)"
+  if [ -n "$other" ]; then
+    warn "the subnet $n already exists in $other, not in $region"
+    warn "the lab's regions are REGION 1 = $REGION1 and REGION 2 = $REGION2"
+    warn "pass --region1/--region2 to match the lab, or delete the old $n first"
+  fi
   info "creating the subnet $n in $region ($range)"
   if gcloud compute networks subnets create "$n" \
        --network="$net" --region="$region" --range="$range" \
@@ -539,6 +566,16 @@ ensure_firewall() {  # $1 = name, $2 = network, $3 = allow, $4 = source ranges
 ensure_instance() {  # $1 = name, $2 = subnet, $3 = preferred zone, $4 = region
   local n="$1" subnet="$2" pref="$3" region="$4"
   local zone="" z tried=""
+
+  # The same name in another zone means the zones do not match what the lab
+  # gave. The grader looks at one zone, not at every zone of that name.
+  local other
+  other="$(gcloud compute instances list --filter="name=$n" \
+            --format="value(zone)" 2>/dev/null | sed 's#.*/zones/##' | head -1)"
+  if [ -n "$other" ] && [ "$other" != "$pref" ]; then
+    warn "$n already exists in the zone $other, not in $pref"
+    warn "the lab's zones are $ZONE1, $ZONE2 and $ZONE3 - pass --zone1/--zone2/--zone3 to match"
+  fi
 
   # The zone has to be in the region of the subnet, otherwise the create
   # call fails with "subnet not found in that zone". If the preferred zone

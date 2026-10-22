@@ -24,9 +24,15 @@ If the lab started your shell with `ZONE`, `ZONE_1` and `ZONE_2` (or `Z1`,
 > **Not every zone is available in a lab project.** A zone that cannot be
 > fetched comes back as
 > `Permission denied on 'locations/<zone>' (or it may not exist)`, and the
-> instance create fails with the same message. If that happens, pick another
-> zone of the same region — `gcloud compute zones describe <zone>` tells you
-> whether the project can use it.
+> instance create fails with the same message. Check what the project
+> allows with:
+>
+> ```bash
+> gcloud compute zones describe us-central1-b
+> ```
+>
+> The on-premises VM needs a zone in REGION 1 that is **not** the zone of
+> `vpc-demo-instance1` — the lab leaves that one to you.
 
 ---
 

@@ -1569,16 +1569,8 @@ gateway configuration* (end of task 7).
 
 They change on every lab run and cannot be read from the project. The script
 takes them from the shell the lab starts — Arcade exports `ZONE`, `ZONE_1`
-and `ZONE_2` (or `Z1`, `Z2`, `Z3`) — and asks for whatever is missing:
-
-```
-  Zone 1 - vpc-demo-instance1 [us-central1-a]:
-  Zone 2 - vpc-demo-instance2 [us-east1-b]:
-  Zone 3 - on-prem-instance1 (in REGION 1 = us-central1, not zone 1) [europe-west1-b]:
-```
-
-The regions are derived from the zones, and the script warns when the two
-regions come out the same.
+and `ZONE_2` (or `Z1`, `Z2`, `Z3`) — and asks for whatever is missing. The
+regions are derived from the zones.
 
 ### Every zone is checked against the API before it is used
 
@@ -1592,17 +1584,35 @@ ERROR: (gcloud.compute.instances.create) Could not fetch resource:
 
 The instance create fails with that message, and it says nothing about the
 zone being the problem. So the script checks the zone first with
-`gcloud compute zones describe` and, when the project refuses it, offers the
-first zone of the region that *does* work:
+`gcloud compute zones describe`, and the prompt lists the zones the project
+*does* accept in that region:
 
 ```
   [WARN] this project cannot use the zone us-central1-b
+    the zones of europe-west1: europe-west1-b
   Zone 3 - on-prem-instance1 (in REGION 1 = europe-west1, not zone 1) [europe-west1-b]:
 ```
+
+Press Enter and it takes the default; the create is still the real test, and
+if it fails the script tries the other zones of the region before giving up.
 
 The same check catches a zone from the wrong region, and the "not zone 1"
 rule for `on-prem-instance1` — the lab wants it in a different zone from
 `vpc-demo-instance1`, and the API does not enforce that.
+
+### The regions have to match what is already there
+
+The lab's regions are per run, and the script cannot invent them. If a
+subnet or an instance already exists in a *different* region or zone than
+the one being used now, the script says so instead of quietly creating a
+second copy with the same name — the grader looks at one of them, and it
+will not know which:
+
+```
+  [WARN] the subnet vpc-demo-subnet1 already exists in europe-west1, not in us-central1
+  [WARN] the lab's regions are REGION 1 = us-central1 and REGION 2 = us-central1
+  [WARN] pass --region1/--region2 to match the lab, or delete the old vpc-demo-subnet1 first
+```
 
 ### Everything HA VPN lives in one region
 
