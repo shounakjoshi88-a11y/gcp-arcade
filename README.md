@@ -2,7 +2,7 @@
 
 Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 
-All 22 labs here were completed for the **Google Cloud Engineering
+All 26 labs here were completed for the **Google Cloud Engineering
 Certificate** (Credly badge, 2026).
 
 | Script | Lab | What it does | Score |
@@ -2213,6 +2213,7 @@ TASKS.md              # GSP321, task by task, for manual runs
 TASKS156.md           # GSP156, task by task, for manual runs
 TASKS345.md           # GSP345, task by task, for manual runs
 TASKS_marketplace.md  # Deploy a LAMP Stack with Cloud Marketplace, by hand
+TASKS_vpc.md           # Get Started with VPC Networking and Compute Engine, by hand
 TASKS_vpc_networks.md  # Create and Configure VPC Networks, by hand
 TASKS_pga_nat.md       # Private Google Access and Cloud NAT, by hand
 TASKS_create_vms.md    # Create Virtual Machines, by hand
