@@ -22,6 +22,7 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp_cloudrun.sh`](./gsp_cloudrun.sh) | **Hello Cloud Run** | Node.js app, Artifact Registry repo, container image, and the Cloud Run deployment | 100/100 |
 | [`gsp_console_shell.sh`](./gsp_console_shell.sh) | **Explore the Google Cloud Console and Cloud Shell** | The console bucket, the Cloud Shell bucket, the file upload, and the persistent environment variables | — |
 | [`gsp_ha_vpn.sh`](./gsp_ha_vpn.sh) | **Configure Google Cloud HA VPN** | The two VPCs, the HA VPN gateways, the Cloud Routers, the four tunnels, the BGP peering and global dynamic routing | — |
+| [`gsp_alb_autoscaling.sh`](./gsp_alb_autoscaling.sh) | **Configure an Application Load Balancer with Autoscaling** | The health check rule, the Cloud NAT, the custom web server image, two instance groups and the IPv4/IPv6 load balancer | — |
 
 *Score* is what the lab console reported after running the script.
 
@@ -1685,6 +1686,99 @@ a heartbeat, so the script never looks stuck.
 
 ---
 
+## Configure an Application Load Balancer with Autoscaling
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_alb_autoscaling.sh
+chmod +x gsp_alb_autoscaling.sh
+./gsp_alb_autoscaling.sh
+```
+
+| Task | What the script does |
+|---|---|
+| 1 | `fw-allow-health-checks` — tcp:80 from `130.211.0.0/22` and `35.191.0.0/16` to the instances tagged `allow-health-checks` ⏸ |
+| 2 | the Cloud Router `nat-router` and the Cloud NAT `nat-config` in REGION 1, and waits for it to be `RUNNING` ⏸ |
+| 3 | the `webserver` VM with no external IP, Apache installed by a startup script, the image `mywebserver` from its boot disk, and the VM deleted ⏸ |
+| 4 | the health check `http-health-check`, the template `mywebserver-template`, and the two groups `us-1-mig` and `notus-1-mig` with autoscaling and autohealing ⏸ |
+| 5 | the backend service `http-backend` with both backends, the URL map, the proxy, and the IPv4 and IPv6 forwarding rules ⏸ |
+| 6 | the `stress-test` VM, ApacheBench against the load balancer, and a wait for the autoscaler to add an instance ⏸ |
+
+### The template must not pin a subnet
+
+An instance template is a **global** resource and both instance groups use
+it — one in each of the lab's two regions. So the template's network
+interface names the network but no subnet, and every VM picks up the default
+subnet of its own region:
+
+```bash
+--network-interface=network=default,no-address
+```
+
+Pinning a subnet there breaks the second group: the VMs land in the first
+region's subnet and the group never becomes healthy.
+
+### The web server VM has no external IP — on purpose
+
+The lab wants the backends to be reachable only through the load balancer,
+so the `webserver` VM is created with `no-address`. That means it cannot
+reach the internet on its own, which is exactly why task 2 puts a **Cloud
+NAT** in place first. Apache is installed by a startup script that goes out
+through that NAT, and the script waits for the serial console to report
+`STARTUP-SCRIPT-DONE` before it images the disk.
+
+### The two backends get different balancing modes
+
+`us-1-mig` is **rate** based (50 RPS per instance) and `notus-1-mig` is
+**utilization** based (80% CPU), which is what the lab asks for and what
+makes the two backends behave differently under the stress test.
+
+The backend service refers to the port by the name `http`, so both groups
+need that named port:
+
+```bash
+gcloud compute instance-groups managed set-named-ports us-1-mig \
+    --region=REGION --named-ports=http:80
+```
+
+### Two forwarding rules, one proxy
+
+The lab asks for IPv4 **and** IPv6. Both forwarding rules point at the same
+target HTTP proxy, and each gets its own address:
+
+```bash
+gcloud compute forwarding-rules create http-lb-ipv4 --global \
+    --target-http-proxy=http-lb-proxy --ports=80 --ip-version=IPV4
+gcloud compute forwarding-rules create http-lb-ipv6 --global \
+    --target-http-proxy=http-lb-proxy --ports=80 --ip-version=IPV6
+```
+
+### The stress test runs in the background
+
+`ab -n 500000 -c 1000` takes a long time, so the script starts it with
+`nohup` on the VM and then watches the instance groups scale up. The log is
+at `/tmp/ab.log` on the VM:
+
+```bash
+gcloud compute ssh stress-test --zone=STRESS_ZONE --command="cat /tmp/ab.log"
+```
+
+### Options
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--project ID` | active gcloud project | Target project |
+| `--region1 REGION` | `$REGION_1` / `$REGION` | The NAT and `us-1-mig` |
+| `--region2 REGION` | `$REGION_2` | `notus-1-mig` |
+| `--zone1 ZONE` | `$ZONE` / `$ZONE_1` | The `webserver` VM |
+| `--stress-region R` | `us-east1` | The region of the stress test VM |
+| `--stress-zone Z` | `$STRESS_ZONE` | The zone of the stress test VM |
+| `--task N` | all | Run only task N (1–6) |
+| `--yes` | off | Do not pause for the checkpoints |
+| `--no-verify` | off | Do not wait for the load balancer and skip the stress test |
+| `-h, --help` | | Usage |
+
+---
+
 ## Layout
 
 
@@ -1708,6 +1802,7 @@ gsp_storagesql.sh     # Getting Started with Cloud Storage and Cloud SQL
 gsp_cloudrun.sh       # Hello Cloud Run
 gsp_console_shell.sh  # Explore the Google Cloud Console and Cloud Shell
 gsp_ha_vpn.sh          # Configure Google Cloud HA VPN
+gsp_alb_autoscaling.sh # Configure an Application Load Balancer with Autoscaling
 TASKS.md              # GSP321, task by task, for manual runs
 TASKS156.md           # GSP156, task by task, for manual runs
 TASKS345.md           # GSP345, task by task, for manual runs
@@ -1725,6 +1820,7 @@ TASKS_storagesql.md   # Cloud Storage and Cloud SQL, task by task, for manual ru
 TASKS_cloudrun.md     # Hello Cloud Run, task by task, for manual runs
 TASKS_console_shell.md # Explore the Google Cloud Console and Cloud Shell, by hand
 TASKS_ha_vpn.md       # Configure Google Cloud HA VPN, by hand
+TASKS_alb_autoscaling.md # Configure an Application Load Balancer with Autoscaling, by hand
 README.md             # this file
 LICENSE               # MIT
 ```
