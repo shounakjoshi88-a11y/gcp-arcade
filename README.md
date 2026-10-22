@@ -1894,17 +1894,18 @@ The repo has two similarly named labs:
 - **Accessing the Google Cloud Console and Cloud Shell** (this one, CBL138) — the
   VM, the service account, the buckets and the nginx page.
 
-### The zone is lab-assigned
+### The zone is fixed by the lab text
 
-The lab hands out a zone per run. The script reads `ZONE` from the environment and
-asks for it with the project default as the suggestion, so nothing is hardcoded.
+The lab pins the location at **region `us-west1`, zone `us-west1-c`**, so the
+script defaults to `us-west1-c`. `--zone` wins if a run hands out something
+else, and Cloud Shell's own `$ZONE` is used when it is set.
 
 ### Options
 
 | Flag | Default | What it does |
 |---|---|---|
 | `--project ID` | active gcloud project | Target project |
-| `--zone ZONE` | `$ZONE` | The zone of `first-vm` |
+| `--zone ZONE` | `us-west1-c` | The zone of `first-vm` |
 | `--task N` | all | Run only task N (1–4) |
 | `--yes` | off | Do not pause for the checkpoints |
 | `-h, --help` | | Usage |

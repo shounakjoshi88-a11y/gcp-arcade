@@ -19,7 +19,7 @@
 #
 #  OPTIONS:
 #     --project ID      GCP project (default: active gcloud project)
-#     --zone ZONE       the lab's zone (default: from the project)
+#     --zone ZONE       the lab's zone (default: us-west1-c, as the lab text says)
 #     --task N          run only task N (1-4)
 #     --yes             do not pause for the checkpoints
 #     -h, --help        this help
@@ -32,11 +32,10 @@
 #                                                         (end of task 4)
 #
 #  NOTES:
-#   * The lab injects the zone per run. The script reads it from the shell
-#     the lab starts (ZONE) and asks for whatever is missing.
-#   * The web server is installed with a startup script, so the VM needs
-#     the default network's SSH rule to be present. The script creates an
-#     IAP SSH rule if the lab's one is missing.
+#   * The lab text fixes the zone at us-west1-c (region us-west1). --zone wins
+#     if the lab hands out a different one; Cloud Shell's $ZONE is next.
+#   * The cat URL is the public one the lab uses:
+#     https://storage.googleapis.com/<project>-bucket1/cat.jpg
 #   * The bucket names are derived from the project ID: <project>-bucket1
 #     and <project>-bucket2.
 # =============================================================================
@@ -77,7 +76,7 @@ QUICK START (Google Cloud Shell):
 
 OPTIONS:
    --project ID      GCP project (default: active gcloud project)
-   --zone ZONE       the lab's zone (default: from the project)
+   --zone ZONE       the lab's zone (default: us-west1-c)
    --task N          run only task N (1-4)
    --yes             do not pause for the checkpoints
 USAGE_END
@@ -113,32 +112,17 @@ fi
 # ---------------------------------------------------------------------------
 # the lab's zone
 # ---------------------------------------------------------------------------
-GCP_ZONE="$(gcloud config get-value compute/zone 2>/dev/null)"
-[ "$GCP_ZONE" = "(unset)" ] && GCP_ZONE=""
-ZONE="${ZONE_OVERRIDE:-${ZONE:-${GCP_ZONE:-us-central1-a}}}"
-
-ask() {  # $1 = variable name, $2 = label, $3 = default
-  local __name="$1" __label="$2" __default="$3" __ans=""
-  printf "  %s%s%s [%s]: " "$C_BOLD" "$__label" "$C_RESET" "$__default"
-  if ! read -r __ans; then
-    echo ""
-    __ans=""
-  fi
-  printf -v "$__name" '%s' "${__ans:-$__default}"
-}
-
-if [ -n "${ZONE_OVERRIDE:-}" ] || [ -n "${ZONE:-}" ]; then
+# The lab text fixes it: Region us-west1, Zone us-west1-c. Cloud Shell's own
+# $ZONE wins when the lab injects a different one, and --zone wins over both.
+LAB_ZONE="us-west1-c"
+if [ -n "${ZONE_OVERRIDE:-}" ]; then
+  ZONE="$ZONE_OVERRIDE"
+  info "zone from --zone: $ZONE"
+elif [ -n "${ZONE:-}" ]; then
   info "the lab's zone came from the environment: $ZONE"
 else
-  echo ""
-  warn "the lab assigns the zone per lab run"
-  dim "  it is on the lab setup panel - copy it from there"
-  if [ -n "$GCP_ZONE" ]; then
-    dim "  the gcloud default zone is $GCP_ZONE"
-  fi
-  echo ""
-  ask ZONE "Zone - the first-vm instance" "${ZONE:-${GCP_ZONE:-us-central1-a}}"
-  echo ""
+  ZONE="$LAB_ZONE"
+  info "the lab fixes the zone: $ZONE (region us-west1)"
 fi
 
 WORKDIR="${WORKDIR:-$HOME/gsp-cbl138}"
@@ -268,17 +252,18 @@ cat <<'HTML' > /var/www/html/index.html
 HTML
 systemctl restart nginx
 EOF
-    local cat_image_url="https://${PROJECT_ID}-bucket1/cat.jpg"
+    local cat_image_url="https://storage.googleapis.com/${PROJECT_ID}-bucket1/cat.jpg"
     sed -i "s|CAT_IMAGE_URL_PLACEHOLDER|$cat_image_url|" "$WORKDIR/startup.sh"
 
     if gcloud compute instances create "first-vm" \
          --zone="$ZONE" --machine-type=e2-micro \
          --tags=http-server \
          --image-family=debian-12 --image-project=debian-cloud \
-         --metadata=startup-script="$(cat "$WORKDIR/startup.sh")" \
-         --project "$PROJECT_ID" --quiet >/dev/null 2>&1; then
+         --metadata-from-file=startup-script="$WORKDIR/startup.sh" \
+         --project "$PROJECT_ID" --quiet > "$WORKDIR/create-vm.log" 2>&1; then
       ok "created the instance first-vm in $ZONE"
     else
+      err "$(tail -n 2 "$WORKDIR/create-vm.log" 2>/dev/null | tr '\n' ' ')"
       note_fail "could not create the instance first-vm"
     fi
   fi
@@ -316,6 +301,12 @@ task2() {
   gcloud auth list 2>&1 | sed 's/^/    /'
   info "the active project"
   gcloud config list project 2>&1 | sed 's/^/    /'
+  info "the project ID Cloud Shell exports"
+  echo "    DEVSHELL_PROJECT_ID=${DEVSHELL_PROJECT_ID:-$PROJECT_ID}"
+  info "the current directory"
+  echo "    $(pwd)"
+  info "and the help page the lab asks you to read"
+  gcloud storage buckets create --help 2>&1 | head -n 8 | sed 's/^/    /'
 
   ok "Cloud Shell is authenticated and configured"
 }
@@ -406,12 +397,18 @@ task4() {
     fi
   fi
 
-  local cat_image_url="https://${PROJECT_ID}-bucket1/cat.jpg"
-  cat > "$WORKDIR/index.html" <<EOF
-<html><head><title>Cat</title></head> <body> <h1>Cat</h1> <img src="$cat_image_url"> </body></html>
+  local cat_image_url="https://storage.googleapis.com/${PROJECT_ID}-bucket1/cat.jpg"
+  mkdir -p "$WORKDIR/orchestrate-with-kubernetes"
+  cat > "$WORKDIR/orchestrate-with-kubernetes/index.html" <<EOF
+<html><head><title>Cat</title></head>
+<body>
+<h1>Cat</h1>
+<img src="$cat_image_url">
+</body></html>
 EOF
-  cp "$WORKDIR/index.html" "$WORKDIR/orchestrate-with-kubernetes/index.html" 2>/dev/null || true
-  ok "the index.html with the cat image is written"
+  cp "$WORKDIR/orchestrate-with-kubernetes/index.html" "$WORKDIR/index.html" 2>/dev/null || true
+  ok "index.html written with the public cat URL"
+  dim "  $cat_image_url"
 
   # wait for the VM to be running
   info "waiting for first-vm to be RUNNING"
@@ -438,7 +435,7 @@ EOF
   info "copying index.html to first-vm"
   local scp_ok=0
   for i in $(seq 1 15); do
-    if gcloud compute scp --zone="$ZONE" --quiet "$WORKDIR/index.html" \
+    if gcloud compute scp --zone="$ZONE" --quiet "$WORKDIR/orchestrate-with-kubernetes/index.html" \
          first-vm:index.html >/dev/null 2>&1; then
       scp_ok=1
       ok "index.html copied to first-vm"
@@ -455,18 +452,39 @@ EOF
 
   info "installing nginx and serving the page"
   local remote="sudo apt-get remove -y --purge man-db 2>/dev/null || true; sudo touch /var/lib/man-db/auto-update; sudo apt-get update -y && sudo apt-get install -y nginx && sudo cp -f ~/index.html /var/www/html/index.html && sudo systemctl restart nginx"
-  gcloud compute ssh first-vm --zone="$ZONE" --quiet --command="$remote" >/dev/null 2>&1 || true
+  local ssh_ok=0
+  for i in $(seq 1 6); do
+    if gcloud compute ssh first-vm --zone="$ZONE" --quiet --command="$remote" \
+         > "$WORKDIR/nginx.log" 2>&1; then
+      ssh_ok=1
+      ok "nginx installed and the page copied to /var/www/html"
+      break
+    fi
+    warn "the nginx install attempt $i/6 did not finish - retrying in 15s"
+    tail -n 3 "$WORKDIR/nginx.log" 2>/dev/null | sed 's/^/    /'
+    sleep 15
+  done
+  if [ "$ssh_ok" -ne 1 ]; then
+    warn "the nginx install did not report success - see $WORKDIR/nginx.log"
+  fi
 
   local vm_ip=""
   vm_ip="$(gcloud compute instances describe first-vm --zone "$ZONE" \
             --project "$PROJECT_ID" --format="value(networkInterfaces[0].accessConfigs[0].natIP)" 2>/dev/null)"
   if [ -n "$vm_ip" ]; then
     info "testing http://$vm_ip/"
-    sleep 3
-    if curl -s -m 5 "http://$vm_ip" | grep -qi "Cat"; then
+    local served=0
+    for i in $(seq 1 10); do
+      if curl -s -m 8 "http://$vm_ip" | grep -qi "Cat"; then
+        served=1
+        break
+      fi
+      sleep 6
+    done
+    if [ "$served" -eq 1 ]; then
       ok "nginx is serving the cat page at http://$vm_ip"
     else
-      warn "nginx did not answer yet - the startup script will finish in a minute"
+      warn "the VM did not answer with the cat page yet - http://$vm_ip"
     fi
   fi
 
