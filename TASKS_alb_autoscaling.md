@@ -7,20 +7,25 @@ the lab project active.
 export PROJECT_ID=$(gcloud config get-value project)
 ```
 
-**The two regions and the zones are lab-assigned per run** — they are on the
-lab setup panel. The lab fixes the first region, the first zone and the
-second region:
+**The two regions and the zones change with every lab run** — the same lab
+was `us-east4` / `us-east4-c` once and `us-central1` / `us-central1-a` the
+next. Take them from the lab instructions, and from the project default:
+
+```bash
+gcloud config get-value compute/region
+gcloud config get-value compute/zone
+```
 
 | Name | What it is | Where it goes |
 |---|---|---|
-| `REGION 1` | `us-east4` | the Cloud NAT, the `webserver` VM, the `us-1-mig` group |
-| `ZONE 1` | `us-east4-c` | the `webserver` VM |
-| `REGION 2` | `asia-south1` | the `notus-1-mig` group |
-| `STRESS ZONE` | a zone in a **US** region other than `us-east4` | the `stress-test` VM |
+| `REGION 1` | the lab's first region | the Cloud NAT, the `webserver` VM, the `us-1-mig` group |
+| `ZONE 1` | a zone in REGION 1 | the `webserver` VM |
+| `REGION 2` | a different region | the `notus-1-mig` group |
+| `STRESS ZONE` | a zone in a **US** region other than REGION 1 | the `stress-test` VM |
 
 > The stress test VM has to go in a region that is **different but closer
-> to `us-east4`** than to `asia-south1`. That is the whole point of task 6:
-> the load balancer forwards the traffic to the closer backend, so `us-1-mig`
+> to REGION 1** than to REGION 2. That is the whole point of task 6: the
+> load balancer forwards the traffic to the closer backend, so `us-1-mig`
 > gets it first and `notus-1-mig` only joins in once the load is high.
 
 ---

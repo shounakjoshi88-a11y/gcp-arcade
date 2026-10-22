@@ -41,20 +41,23 @@
 #     6. Stress test an Application Load Balancer (HTTP)     (end of task 6)
 #
 #  NOTES:
-#   * The lab fixes the first region, the first zone and the second region:
-#     the Cloud NAT, the web server VM and the us-1-mig group live in
-#     us-east4 (zone us-east4-c), the notus-1-mig group in asia-south1. Only
-#     the stress test VM is left to the student - it goes in a region that is
-#     different but closer to us-east4 than to asia-south1, so the load
-#     balancer has to pick the closer backend.
+#   * The first region, the first zone and the second region change with
+#     every lab run. The same lab was us-east4 / us-east4-c once and
+#     us-central1 / us-central1-a the next time, so the script reads them
+#     from the shell the lab starts and from the project default, and asks
+#     for whatever is left. Only the stress test VM is left to the student -
+#     it goes in a region that is different but closer to the first region
+#     than to the second one, so the load balancer has to pick the closer
+#     backend.
 #   * The instance template must NOT pin a subnet. A template is a global
 #     resource and both instance groups use it - one in each region - so the
 #     VM has to pick up the default subnet of its own region.
 #   * The web server VM has no external IP on purpose, so Apache is
 #     installed by a startup script that goes out through the Cloud NAT of
 #     task 2. That is the only way the VM can reach the package mirrors.
-#   * The health check is HTTP, not TCP. A global HTTP health check is also
-#     what the autohealing of a regional instance group accepts.
+#   * The health check is the legacy HTTP one, not the newer global kind -
+#     the autohealing of a regional instance group only accepts the legacy
+#     one.
 #   * Creating an image, an instance group or a load balancer blocks for
 #     minutes, and a silent wait looks exactly like a hang, so those calls
 #     stream with a heartbeat.
@@ -183,9 +186,9 @@ region_usable() {  # $1 = region
 
 # Ask for a region. A value that is already good is taken as it is.
 # Sets REPLY.
-acquire_region() {  # $1 = label, $2 = current value, $3 = region it has to differ from
-  local label="$1" current="$2" other="${3:-}"
-  local ans note="" tries=0 default="$2"
+acquire_region() {  # $1 = label, $2 = current value, $3 = region it has to differ from, $4 = default
+  local label="$1" current="$2" other="${3:-}" default="${4:-$2}"
+  local ans note="" tries=0
 
   if [ -n "$current" ]; then
     if ! region_usable "$current"; then
@@ -263,16 +266,18 @@ all_zones_in() {  # $1 = region, $2 = zone to avoid
 # Ask for a zone. A value that is already good is taken as it is. The
 # candidates of the region are listed, so the answer is never a guess.
 # Sets REPLY.
-acquire_zone() {  # $1 = label, $2 = current value, $3 = region ("" = any), $4 = zone to avoid
-  local label="$1" current="$2" want_region="$3" avoid="$4"
-  local ans note="" zr tries=0 default="$2" cands=""
+acquire_zone() {  # $1 = label, $2 = current value, $3 = region ("" = any), $4 = zone to avoid, $5 = default
+  local label="$1" current="$2" want_region="$3" avoid="$4" default="${5:-$2}"
+  local ans note="" zr tries=0 cands=""
 
   if [ -n "$want_region" ]; then
     cands="$(usable_zones_in "$want_region" "$avoid")"
     if [ -z "$cands" ]; then
       cands="$(all_zones_in "$want_region" "$avoid")"
     fi
-    default="${cands%% *}"
+    if [ -z "$default" ] || [ -z "${5:-}" ]; then
+      default="${cands%% *}"
+    fi
     [ -z "$default" ] && default="$current"
   fi
 
@@ -359,16 +364,22 @@ GCP_ZONE="$(gcloud config get-value compute/zone 2>/dev/null)"
 GCP_REGION="$(gcloud config get-value compute/region 2>/dev/null)"
 [ "$GCP_REGION" = "(unset)" ] && GCP_REGION=""
 
-# The lab fixes the first region, the first zone and the second region:
-# the Cloud NAT, the web server VM and the us-1-mig group live in us-east4
-# (zone us-east4-c), the notus-1-mig group in asia-south1. Only the stress
-# test VM is left to the student - it has to go in a region that is
-# different but closer to us-east4 than to asia-south1.
-REGION1="${REGION1_OVERRIDE:-${REGION_1:-${REGION:-us-east4}}}"
-REGION2="${REGION2_OVERRIDE:-${REGION_2:-${REGION_NOTUS:-asia-south1}}}"
-ZONE1="${ZONE1_OVERRIDE:-${ZONE:-${ZONE_1:-us-east4-c}}}"
-STRESS_REGION="${STRESS_REGION_OVERRIDE:-${STRESS_REGION_ENV:-us-east1}}"
+# The first region, the first zone and the second region change with every
+# lab run - the same lab was us-east4 / us-east4-c once and
+# us-central1 / us-central1-a the next time. The second region has been
+# asia-south1 both times, and the stress test VM is left to the student: it
+# has to go in a region that is different but closer to the first region
+# than to the second one.
+REGION1="${REGION1_OVERRIDE:-${REGION_1:-${REGION:-}}}"
+REGION2="${REGION2_OVERRIDE:-${REGION_2:-${REGION_NOTUS:-}}}"
+ZONE1="${ZONE1_OVERRIDE:-${ZONE:-${ZONE_1:-}}}"
+STRESS_REGION="${STRESS_REGION_OVERRIDE:-${STRESS_REGION_ENV:-}}"
 STRESS_ZONE="${STRESS_ZONE_OVERRIDE:-${STRESS_ZONE_ENV:-}}"
+
+REGION1_DEFAULT="${GCP_REGION:-us-central1}"
+REGION2_DEFAULT="asia-south1"
+ZONE1_DEFAULT="${GCP_ZONE:-us-central1-a}"
+STRESS_REGION_DEFAULT="us-east1"
 
 if [ -n "$ZONE1" ] || [ -n "$STRESS_ZONE" ]; then
   info "the lab's zones came from the environment: zone1=$ZONE1 stress=$STRESS_ZONE"
@@ -376,21 +387,24 @@ fi
 
 echo ""
 warn "the lab assigns the regions and the zones per lab run"
-dim "  they are on the lab setup panel - copy them from there"
-dim "  the lab uses $REGION1 (zone $ZONE1) and $REGION2"
+dim "  they are on the lab setup panel and in the lab instructions - copy them"
+dim "  the project default is $GCP_REGION / $GCP_ZONE"
 echo ""
 
-acquire_region "Region 1 - the NAT and the $MIG1 group" "$REGION1" "$REGION2"
+acquire_region "Region 1 - the NAT and the $MIG1 group" "$REGION1" "$REGION2" "$REGION1_DEFAULT"
 REGION1="$REPLY"
-acquire_region "Region 2 - the $MIG2 group (a different region)" "$REGION2" "$REGION1"
+acquire_region "Region 2 - the $MIG2 group (a different region)" "$REGION2" "$REGION1" "$REGION2_DEFAULT"
 REGION2="$REPLY"
 
 acquire_zone "Zone 1 - the $WEBSERVER VM (in REGION 1 = $REGION1)" \
-             "${ZONE1:-}" "$REGION1" ""
+             "$ZONE1" "$REGION1" "" "$ZONE1_DEFAULT"
 ZONE1="$REPLY"
 
+acquire_region "Region for the stress test VM (a US region, not $REGION1)" \
+               "$STRESS_REGION" "$REGION1" "$STRESS_REGION_DEFAULT"
+STRESS_REGION="$REPLY"
 acquire_zone "Zone for the stress test VM (in $STRESS_REGION)" \
-             "${STRESS_ZONE:-}" "$STRESS_REGION" ""
+             "$STRESS_ZONE" "$STRESS_REGION" ""
 STRESS_ZONE="$REPLY"
 STRESS_REGION="${STRESS_ZONE%-*}"
 if [ "$STRESS_REGION" = "$REGION1" ]; then

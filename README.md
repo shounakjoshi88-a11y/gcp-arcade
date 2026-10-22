@@ -1703,11 +1703,27 @@ chmod +x gsp_alb_autoscaling.sh
 | 5 | the backend service `http-backend` with both backends, the URL map, the proxy, and the IPv4 and IPv6 forwarding rules ⏸ |
 | 6 | the `stress-test` VM, ApacheBench against the load balancer, and a wait for the autoscaler to add an instance ⏸ |
 
-The lab fixes the first region, the first zone and the second region:
-`us-east4` (zone `us-east4-c`) for the Cloud NAT, the `webserver` VM and
-`us-1-mig`, and `asia-south1` for `notus-1-mig`. Only the stress test VM is
-left to the student — it has to go in a **US** region other than `us-east4`,
-so the load balancer has to pick the closer backend.
+The lab's regions and zones **change with every run** — the same lab was
+`us-east4` / `us-east4-c` one day and `us-central1` / `us-central1-a` the
+next. So the script never assumes them: it takes what the lab exports
+(`ZONE`, `ZONE_1`, `REGION`, `REGION_1`), offers the project default as a
+suggestion, and asks for the rest:
+
+```
+  Region 1 - the NAT and the us-1-mig group [us-central1]:
+  Region 2 - the notus-1-mig group (a different region) [asia-south1]:
+  Zone 1 - the webserver VM (in REGION 1 = us-central1) [us-central1-a]:
+  Region for the stress test VM (a US region, not us-central1) [us-east1]:
+  Zone for the stress test VM (in us-east1) [us-east1-b]:
+```
+
+Every zone is checked against the API before it is used, and the zone
+candidates of the region are listed, so the answer is never a guess.
+
+The second region has been `asia-south1` both times, and the stress test VM
+is the one value the lab genuinely leaves to you: it has to go in a **US**
+region other than the first one, so the load balancer forwards the traffic
+to the closer backend.
 
 ### The health check is HTTP, and it is the legacy kind
 
@@ -1790,11 +1806,11 @@ gcloud compute ssh stress-test --zone=STRESS_ZONE --command="cat /tmp/ab.log"
 | Flag | Default | What it does |
 |---|---|---|
 | `--project ID` | active gcloud project | Target project |
-| `--region1 REGION` | `us-east4` | The NAT and `us-1-mig` |
+| `--region1 REGION` | the project default | The NAT and `us-1-mig` |
 | `--region2 REGION` | `asia-south1` | `notus-1-mig` |
-| `--zone1 ZONE` | `us-east4-c` | The `webserver` VM |
+| `--zone1 ZONE` | the project default | The `webserver` VM |
 | `--stress-region R` | `us-east1` | The region of the stress test VM |
-| `--stress-zone Z` | `$STRESS_ZONE` | The zone of the stress test VM |
+| `--stress-zone Z` | a zone of that region | The zone of the stress test VM |
 | `--task N` | all | Run only task N (1–6) |
 | `--yes` | off | Do not pause for the checkpoints |
 | `--no-verify` | off | Do not wait for the load balancer and skip the stress test |
