@@ -24,6 +24,7 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp_ha_vpn.sh`](./gsp_ha_vpn.sh) | **Configure Google Cloud HA VPN** | The two VPCs, the HA VPN gateways, the Cloud Routers, the four tunnels, the BGP peering and global dynamic routing | — |
 | [`gsp_alb_autoscaling.sh`](./gsp_alb_autoscaling.sh) | **Configure an Application Load Balancer with Autoscaling** | The health check rule, the Cloud NAT, the custom web server image, two instance groups and the IPv4/IPv6 load balancer | — |
 | [`gsp_internal_lb.sh`](./gsp_internal_lb.sh) | **Configure an Internal Network Load Balancer** | The lb-access and health-check rules, the Cloud NAT, the two instance templates, the two instance groups and the internal load balancer at `10.10.30.5` | — |
+| [`gsp_terraform.sh`](./gsp_terraform.sh) | **Automating the Deployment of Infrastructure Using Terraform** | The Terraform workspace, `provider.tf`, `instance/main.tf`, `mynetwork.tf`, and the `terraform init` / `plan` / `apply` that creates `mynetwork` and the two VMs | — |
 
 *Score* is what the lab console reported after running the script.
 
@@ -1819,6 +1820,55 @@ gcloud compute ssh stress-test --zone=STRESS_ZONE --command="cat /tmp/ab.log"
 
 ---
 
+## Automating the Deployment of Infrastructure Using Terraform
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_terraform.sh
+chmod +x gsp_terraform.sh
+./gsp_terraform.sh
+```
+
+| Task | What the script does |
+|---|---|
+| 1 | Installs the real Terraform (Cloud Shell ships a placeholder wrapper), then stages `~/tfinfra/` with `provider.tf`, `instance/variables.tf`, `instance/main.tf` and `mynetwork.tf` ⏸ |
+| 2 | `terraform init`, `terraform plan`, then `terraform apply` with the retry the lab needs, because the subnets of an auto mode network are still provisioning in the background ⏸ |
+| 3 | Lists `mynet-vm-1` and `mynet-vm-2` and pings one from the other over the IAP tunnel ⏸ |
+
+### The lab stages everything in `~/tfinfra`
+
+The lab is about the Terraform *workflow*, not about the resources. So the
+script writes the four files the lab asks for and runs `init`, `plan` and
+`apply` — it does not shortcut them. The `mynetwork.tf` is written with the
+lab's two zones already substituted, so the plan is reviewable before it
+runs.
+
+### The apply has to be retried
+
+An auto mode network creates its subnets in the background. `terraform
+apply` can start before they exist, fail with a subnet error, and succeed
+on the next try. The script retries up to four times with a 15 second
+pause.
+
+### The two zones are lab-assigned
+
+The lab asks for two zones. The script takes `ZONE_1` and `ZONE_2` from the
+environment and asks for whatever is missing, with the project default as the
+suggestion.
+
+### Options
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--project ID` | active gcloud project | Target project |
+| `--zone1 ZONE` | `$ZONE_1` | The zone of `mynet-vm-1` |
+| `--zone2 ZONE` | `$ZONE_2` | The zone of `mynet-vm-2` |
+| `--workspace PATH` | `~/tfinfra` | Where to stage the Terraform files |
+| `--task N` | all | Run only task N (1–3) |
+| `--yes` | off | Do not pause for the checkpoints |
+| `-h, --help` | | Usage |
+
+---
+
 ## Layout
 
 
@@ -1844,6 +1894,7 @@ gsp_console_shell.sh  # Explore the Google Cloud Console and Cloud Shell
 gsp_ha_vpn.sh          # Configure Google Cloud HA VPN
 gsp_alb_autoscaling.sh # Configure an Application Load Balancer with Autoscaling
 gsp_internal_lb.sh     # Configure an Internal Network Load Balancer
+gsp_terraform.sh       # Automating the Deployment of Infrastructure Using Terraform
 TASKS.md              # GSP321, task by task, for manual runs
 TASKS156.md           # GSP156, task by task, for manual runs
 TASKS345.md           # GSP345, task by task, for manual runs
