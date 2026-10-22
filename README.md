@@ -23,6 +23,7 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp_console_shell.sh`](./gsp_console_shell.sh) | **Explore the Google Cloud Console and Cloud Shell** | The console bucket, the Cloud Shell bucket, the file upload, and the persistent environment variables | — |
 | [`gsp_access_console_shell.sh`](./gsp_access_console_shell.sh) | **Accessing the Google Cloud Console and Cloud Shell** | The `first-vm` instance with the `http-server` tag, the service account with the Editor role, the two buckets, the cat image and nginx | — |
 | [`gsp_cloud_build.sh`](./gsp_cloud_build.sh) | **Working with Cloud Build** | `quickstart-docker-repo`, the `quickstart.sh` + `Dockerfile` image, `cloudbuild.yaml`, and the `cloudbuild2.yaml` build that fails its own test step on purpose | — |
+| [`gsp_gke_autopilot.sh`](./gsp_gke_autopilot.sh) | **Deploying GKE Autopilot Clusters** | The regional `autopilot-cluster-1` cluster and the `nginx-1` deployment with three Pods, plus the kubectl output behind every console tab in task 3 | — |
 | [`gsp_ha_vpn.sh`](./gsp_ha_vpn.sh) | **Configure Google Cloud HA VPN** | The two VPCs, the HA VPN gateways, the Cloud Routers, the four tunnels, the BGP peering and global dynamic routing | — |
 | [`gsp_alb_autoscaling.sh`](./gsp_alb_autoscaling.sh) | **Configure an Application Load Balancer with Autoscaling** | The health check rule, the Cloud NAT, the custom web server image, two instance groups and the IPv4/IPv6 load balancer | — |
 | [`gsp_internal_lb.sh`](./gsp_internal_lb.sh) | **Configure an Internal Network Load Balancer** | The lb-access and health-check rules, the Cloud NAT, the two instance templates, the two instance groups and the internal load balancer at `10.10.30.5` | — |
@@ -1960,6 +1961,53 @@ and warns that the coming push will fail.
 
 ---
 
+## Deploying GKE Autopilot Clusters
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_gke_autopilot.sh
+chmod +x gsp_gke_autopilot.sh
+./gsp_gke_autopilot.sh
+```
+
+| Task | What the script does |
+|---|---|
+| 1 | Enables the Kubernetes Engine API, creates the regional `autopilot-cluster-1`, waits for it, then pulls the kubeconfig ⏸ |
+| 2 | `kubectl create deployment nginx-1 --image=nginx --replicas=3`, waits for the rollout, prints the deployment and Pods ⏸ |
+| 3 | Prints the kubectl equivalent of every tab the lab has you click: details, revision history, events, YAML, the managed Pod |
+
+### This is the console variant
+
+The repo also covers *Deploying GKE Autopilot Clusters **from Cloud Shell***,
+which is a different lab with different checkpoints (*Deploy GKE clusters*,
+*Deploy Pods to GKE clusters*, *Deploy a new pod using a Yaml file*). This
+script is for the console lab: **Deploy GKE cluster** and **Deploy a sample
+nginx workload**.
+
+### Autopilot is regional
+
+There are no node pools, machine types or node counts to choose — Google
+provisions and scales the nodes. The script only sets the name and the region,
+which is exactly what the console dialog asks for.
+
+### The region is assigned per run
+
+The console makes you pick it from a dropdown, so the script reads `--region`,
+then `$REGION`, and asks for anything left with `us-central1` as the
+suggestion.
+
+### Options
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--project ID` | active gcloud project | Target project |
+| `--region REGION` | `$REGION`, else asked | The cluster's region |
+| `--task N` | all | Run only task N (1–3) |
+| `--yes` | off | Do not pause for the checkpoints |
+| `--timeout MIN` | 30 | Reserved for the cluster wait |
+| `-h, --help` | | Usage |
+
+---
+
 ## Layout
 
 
@@ -1984,6 +2032,7 @@ gsp_cloudrun.sh       # Hello Cloud Run
 gsp_console_shell.sh  # Explore the Google Cloud Console and Cloud Shell
 gsp_access_console_shell.sh # Accessing the Google Cloud Console and Cloud Shell
 gsp_cloud_build.sh     # Working with Cloud Build
+gsp_gke_autopilot.sh   # Deploying GKE Autopilot Clusters
 gsp_ha_vpn.sh          # Configure Google Cloud HA VPN
 gsp_alb_autoscaling.sh # Configure an Application Load Balancer with Autoscaling
 gsp_internal_lb.sh     # Configure an Internal Network Load Balancer
@@ -2010,6 +2059,7 @@ TASKS_internal_lb.md     # Configure an Internal Network Load Balancer, by hand
 TASKS_terraform.md       # Automating the Deployment of Infrastructure with Terraform, by hand
 TASKS_access_console_shell.md # Accessing the Google Cloud Console and Cloud Shell, by hand
 TASKS_cloud_build.md     # Working with Cloud Build, by hand
+TASKS_gke_autopilot.md   # Deploying GKE Autopilot Clusters, by hand
 README.md             # this file
 LICENSE               # MIT
 ```
