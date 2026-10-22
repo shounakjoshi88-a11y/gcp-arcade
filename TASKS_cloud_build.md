@@ -5,12 +5,13 @@ project active.
 
 ```bash
 export PROJECT_ID=$(gcloud config get-value project)
-export REGION=$(gcloud config get-value compute/region)   # or copy it from the lab panel
+export REGION=us-east4
 ```
 
-The region is lab-injected, and it appears in two places: the Artifact
-Registry location and the image host `<region>-docker.pkg.dev`. If it is
-wrong, every push lands in a repository the grader never looks at.
+The lab text pins the region to **`us-east4`**, and it appears in two places:
+the Artifact Registry location and the image host `<region>-docker.pkg.dev`.
+If the two disagree, every push lands in a repository the grader never looks
+at.
 
 ---
 

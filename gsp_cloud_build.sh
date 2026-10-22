@@ -18,7 +18,7 @@
 #
 #  OPTIONS:
 #     --project ID      GCP project (default: active gcloud project)
-#     --region REGION   where quickstart-docker-repo lives (default: $REGION)
+#     --region REGION   where quickstart-docker-repo lives (default: us-east4)
 #     --task N          run only task N (1-4)
 #     --yes             do not pause for the checkpoints
 #     -h, --help        this help
@@ -29,9 +29,9 @@
 #        Cloud Build                                      (end of task 4)
 #
 #  NOTES:
-#   * The region is lab-injected. The script reads $REGION, then the gcloud
-#     default region, and asks for anything still missing. Nothing is
-#     hardcoded, because the lab hands out a different region per run.
+#   * The lab text fixes the region at us-east4, and it appears twice: the
+#     Artifact Registry location and the <region>-docker.pkg.dev image host.
+#     --region wins, then $REGION, then us-east4.
 #   * The image lives in Artifact Registry, not gcr.io:
 #       <region>-docker.pkg.dev/<project>/quickstart-docker-repo/quickstart-image:tag1
 #   * The last build is SUPPOSED to fail. The script treats a non-zero build
@@ -74,7 +74,7 @@ QUICK START (Google Cloud Shell):
 
 OPTIONS:
    --project ID      GCP project (default: active gcloud project)
-   --region REGION   where quickstart-docker-repo lives (default: $REGION)
+   --region REGION   where quickstart-docker-repo lives (default: us-east4)
    --task N          run only task N (1-4)
    --yes             do not pause for the checkpoints
 USAGE_END
@@ -110,35 +110,16 @@ fi
 # ---------------------------------------------------------------------------
 # region
 # ---------------------------------------------------------------------------
-GCP_REGION="$(gcloud config get-value compute/region 2>/dev/null)"
-[ "$GCP_REGION" = "(unset)" ] && GCP_REGION=""
-
-ask() {  # $1 = variable name, $2 = label, $3 = default
-  local __name="$1" __label="$2" __default="$3" __ans=""
-  printf "  %s%s%s [%s]: " "$C_BOLD" "$__label" "$C_RESET" "$__default"
-  if ! read -r __ans; then
-    echo ""
-    __ans=""
-  fi
-  printf -v "$__name" '%s' "${__ans:-$__default}"
-}
 
 if [ -n "$REGION_OVERRIDE" ]; then
   REGION="$REGION_OVERRIDE"
   info "region from --region: $REGION"
 elif [ -n "${REGION:-}" ]; then
   info "the lab's region came from the environment: $REGION"
-elif [ -n "$GCP_REGION" ]; then
-  REGION="$GCP_REGION"
-  info "region from the gcloud default: $REGION"
 else
-  echo ""
-  warn "the lab assigns the region per run"
-  dim "  it is on the lab setup panel, and the lab text uses it in the"
-  dim "  quickstart-docker-repo path - copy it from there"
-  echo ""
-  ask REGION "Region - where quickstart-docker-repo lives" "europe-west1"
-  echo ""
+  REGION="us-east4"
+  info "the lab fixes the region: $REGION"
+  dim "  the lab text spells us-east4 out in the repository and image paths"
 fi
 
 WORKDIR="${WORKDIR:-$HOME/gsp-cbl139}"
@@ -298,18 +279,32 @@ task2() {
     ok "the Artifact Registry repository $REPO already exists in $REGION"
   else
     info "creating the Artifact Registry repository $REPO in $REGION"
-    if gcloud artifacts repositories create "$REPO" \
-         --repository-format=docker --location="$REGION" \
-         --description="Docker repository" \
-         --project "$PROJECT_ID" --quiet >/dev/null 2>&1; then
+    local created=0 i
+    for i in 1 2 3; do
+      if gcloud artifacts repositories create "$REPO" \
+           --repository-format=docker --location="$REGION" \
+           --description="Docker repository" \
+           --project "$PROJECT_ID" --quiet > "$WORKDIR/repo-create.log" 2>&1; then
+        created=1
+        break
+      fi
+      # the Artifact Registry API can still be propagating for a minute
+      sleep 10
+    done
+    if [ "$created" -eq 1 ]; then
       ok "created $REPO"
     else
-      note_fail "could not create the Artifact Registry repository $REPO"
+      err "gcloud said: $(grep -viE '^(WARNING|Note)' "$WORKDIR/repo-create.log" 2>/dev/null | tail -n 2 | tr '\n' ' ')"
+      note_fail "could not create the Artifact Registry repository $REPO in $REGION"
     fi
   fi
 
   info "build 1/3 - gcloud builds submit --tag (uses the Dockerfile)"
   dim "  $IMAGE"
+  if ! repo_exists; then
+    warn "the repository is still missing, so this push is expected to fail"
+    dim "  gcloud's complaint: $(tail -n 2 "$WORKDIR/repo-create.log" 2>/dev/null | tr '\n' ' ')"
+  fi
   if run_live "$WORKDIR/build1.log" \
        gcloud builds submit --project "$PROJECT_ID" --tag "$IMAGE" .; then
     ok "the first image is built and pushed to Artifact Registry"

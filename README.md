@@ -1936,20 +1936,24 @@ Build reports `BUILD FAILURE` — that failure is the objective. The script
 prints the failure lines and counts it as success; it only warns if the build
 somehow passes.
 
-### The region is lab-injected
+### The region is fixed by the lab text
 
-The image lives at
-`<region>-docker.pkg.dev/<project>/quickstart-docker-repo/quickstart-image:tag1`,
-so a wrong region pushes to a repository the grader never reads. The script
-takes `--region`, then `$REGION`, then the gcloud default, and asks for
-whatever is left.
+Every command in the lab spells out **`us-east4`**, and the region appears in
+two places: the Artifact Registry location and the
+`<region>-docker.pkg.dev` image host. A mismatch pushes the image to a
+repository the grader never reads, so the script defaults to `us-east4`
+(`--region` and `$REGION` still win).
+
+If the repository cannot be created, the script now prints gcloud's actual
+error instead of a bare failure line, retries for the API propagation window,
+and warns that the coming push will fail.
 
 ### Options
 
 | Flag | Default | What it does |
 |---|---|---|
 | `--project ID` | active gcloud project | Target project |
-| `--region REGION` | `$REGION` | Artifact Registry location and image host |
+| `--region REGION` | `us-east4` | Artifact Registry location and image host |
 | `--task N` | all | Run only task N (1–4) |
 | `--yes` | off | Do not pause for the checkpoints |
 | `-h, --help` | | Usage |
