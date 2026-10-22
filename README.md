@@ -22,6 +22,7 @@ Automation for **Google Cloud Arcade** / Cloud Skills Boost challenge labs.
 | [`gsp_cloudrun.sh`](./gsp_cloudrun.sh) | **Hello Cloud Run** | Node.js app, Artifact Registry repo, container image, and the Cloud Run deployment | 100/100 |
 | [`gsp_console_shell.sh`](./gsp_console_shell.sh) | **Explore the Google Cloud Console and Cloud Shell** | The console bucket, the Cloud Shell bucket, the file upload, and the persistent environment variables | — |
 | [`gsp_access_console_shell.sh`](./gsp_access_console_shell.sh) | **Accessing the Google Cloud Console and Cloud Shell** | The `first-vm` instance with the `http-server` tag, the service account with the Editor role, the two buckets, the cat image and nginx | — |
+| [`gsp_cloud_build.sh`](./gsp_cloud_build.sh) | **Working with Cloud Build** | `quickstart-docker-repo`, the `quickstart.sh` + `Dockerfile` image, `cloudbuild.yaml`, and the `cloudbuild2.yaml` build that fails its own test step on purpose | — |
 | [`gsp_ha_vpn.sh`](./gsp_ha_vpn.sh) | **Configure Google Cloud HA VPN** | The two VPCs, the HA VPN gateways, the Cloud Routers, the four tunnels, the BGP peering and global dynamic routing | — |
 | [`gsp_alb_autoscaling.sh`](./gsp_alb_autoscaling.sh) | **Configure an Application Load Balancer with Autoscaling** | The health check rule, the Cloud NAT, the custom web server image, two instance groups and the IPv4/IPv6 load balancer | — |
 | [`gsp_internal_lb.sh`](./gsp_internal_lb.sh) | **Configure an Internal Network Load Balancer** | The lb-access and health-check rules, the Cloud NAT, the two instance templates, the two instance groups and the internal load balancer at `10.10.30.5` | — |
@@ -1912,6 +1913,49 @@ else, and Cloud Shell's own `$ZONE` is used when it is set.
 
 ---
 
+## Working with Cloud Build
+
+```bash
+curl -fsSL -O https://raw.githubusercontent.com/shounakjoshi88-a11y/gcp-arcade/main/gsp_cloud_build.sh
+chmod +x gsp_cloud_build.sh
+./gsp_cloud_build.sh
+```
+
+| Task | What the script does |
+|---|---|
+| 1 | Enables Cloud Build and Artifact Registry, and lets the Cloud Build service account push to the repository |
+| 2 | Writes `quickstart.sh` and the `Dockerfile`, creates `quickstart-docker-repo`, then build 1/3 with `--tag` |
+| 3 | Writes `cloudbuild.yaml` with the region substituted and runs build 2/3 with `--config` ⏸ |
+| 4 | Rewrites `quickstart.sh` to fail on an argument, writes `cloudbuild2.yaml`, runs build 3/3 and confirms it fails ⏸ |
+
+### The third build is supposed to fail
+
+`cloudbuild2.yaml` adds a step that runs the image it just built with the
+argument `fail`, and `quickstart.sh` exits 1 when it gets an argument. Cloud
+Build reports `BUILD FAILURE` — that failure is the objective. The script
+prints the failure lines and counts it as success; it only warns if the build
+somehow passes.
+
+### The region is lab-injected
+
+The image lives at
+`<region>-docker.pkg.dev/<project>/quickstart-docker-repo/quickstart-image:tag1`,
+so a wrong region pushes to a repository the grader never reads. The script
+takes `--region`, then `$REGION`, then the gcloud default, and asks for
+whatever is left.
+
+### Options
+
+| Flag | Default | What it does |
+|---|---|---|
+| `--project ID` | active gcloud project | Target project |
+| `--region REGION` | `$REGION` | Artifact Registry location and image host |
+| `--task N` | all | Run only task N (1–4) |
+| `--yes` | off | Do not pause for the checkpoints |
+| `-h, --help` | | Usage |
+
+---
+
 ## Layout
 
 
@@ -1935,6 +1979,7 @@ gsp_storagesql.sh     # Getting Started with Cloud Storage and Cloud SQL
 gsp_cloudrun.sh       # Hello Cloud Run
 gsp_console_shell.sh  # Explore the Google Cloud Console and Cloud Shell
 gsp_access_console_shell.sh # Accessing the Google Cloud Console and Cloud Shell
+gsp_cloud_build.sh     # Working with Cloud Build
 gsp_ha_vpn.sh          # Configure Google Cloud HA VPN
 gsp_alb_autoscaling.sh # Configure an Application Load Balancer with Autoscaling
 gsp_internal_lb.sh     # Configure an Internal Network Load Balancer
@@ -1960,6 +2005,7 @@ TASKS_alb_autoscaling.md # Configure an Application Load Balancer with Autoscali
 TASKS_internal_lb.md     # Configure an Internal Network Load Balancer, by hand
 TASKS_terraform.md       # Automating the Deployment of Infrastructure with Terraform, by hand
 TASKS_access_console_shell.md # Accessing the Google Cloud Console and Cloud Shell, by hand
+TASKS_cloud_build.md     # Working with Cloud Build, by hand
 README.md             # this file
 LICENSE               # MIT
 ```
